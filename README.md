@@ -123,9 +123,9 @@ of crashing.
 Stage 2: **complete** (55/55 tests pass). Effect declarations, uses clause,
 perform operations, and static effect checking before running.
 
-Stage 3: **in progress (parser and static checks only)**.
+Stage 3: **in progress (35/46 tests passing)**.
 Effect handlers with single-answer resumption via `handle { block } with { op(args) k => expr }`.
-Parser and static checks working (13/46 tests pass). Evaluator pending.
+Continuation-passing evaluator with thread-local tracking for abort detection.
 
 ## Goals
 

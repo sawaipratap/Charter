@@ -201,16 +201,17 @@ Static checks complete:
 - collect_all_effects handles Handle (effects discharged by handler)
 
 Evaluator implementation (continuation-passing style):
-- Thread-local flags track continuation invocation and resumption
+- Thread-local flags: CONTINUATION_INVOKED, IN_RESUMPTION, HANDLER_FOUND
 - Binary expressions capture continuations: `it <op> right`
 - When k(value) is called, continuation is resumed with value
-- IN_RESUMPTION flag prevents nested continuation capture
+- HANDLER_FOUND tracks if handler was found for abort detection
+- Placeholder continuation for non-binary perform points
 - Handler inheritance in function calls for lexical scoping
 
-Tests: 19/46 passing
+Tests: 35/46 passing (up from 19)
 
-Passing tests: resume_once, abort_without_resume, no_perform_executed,
-same_handler_reused_in_loop, trailing_comma_in_clauses, etc.
+Passing tests: resume_once, abort_without_resume, abort_skips_rest_of_block,
+no_perform_executed, trailing_comma_in_clauses, bool_through_handler, etc.
 
 Remaining: arity checking for handler clauses, duplicate clause detection,
 nested handlers, outer handler propagation for unhandled effects.
