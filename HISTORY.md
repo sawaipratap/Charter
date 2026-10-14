@@ -185,26 +185,21 @@ Design decisions:
 - **Declarations can be interleaved**: effects, functions, and the main
   expression can appear in any order.
 
-### Stage 3: Effect handlers (in progress)
+### Stage 3: Effect handlers
 
-Stack machine with defunctionalized continuations (commits b4e608d, c1c1c43):
-- enum Frame: BinLeft, BinRight, Let, CallArgs, CallBody, If, Block, UnaryMinus, Not, HandleScope, PerformArgs, KCallArg
+Stack machine with defunctionalized continuations (commit 4b26419):
+- enum Frame: BinLeft, BinRight, Let, CallArgs, CallBody, If, Block, UnaryMinus, Not, HandleScope{clauses, env}, PerformArgs, KCallArg
 - Continuation: frames above HandleScope as [HandleScope, f_bottom, ..., f_top]
 - k(value): push frames in stored order, State::Return(value)
 - Short-circuit && and ||
 - HandleScope lookup finds scope with matching op clause
+- Handler env starts from handle expression's env, then params, then k
 
-Bugs fixed (commits b4e608d, c1c1c43):
-- CallArgs next_idx: new_done.len() not done.len()
-- Block binding: fixed binding order and remaining tracking
-- No-argument function/perform calls handled
-- Effect checking: filtered collect_all_effects for handled effects
-- Clause body effect checking
-- k arity must be 1 (static check error)
+Static checks:
+- Handler clause arity must match operation arity
+- Duplicate handler clauses rejected
+- Unknown operations in handler rejected
+- k arity must be 1 argument
+- Clause body effects checked against enclosing context
 
-Test results: 52/53 passing (commit c1c1c43)
-
-Passing: all probe tests, resume_once, abort_*, bool_through_handler,
-same_handler_reused_in_loop, two_arg_op, etc.
-
-Remaining: reject_clause_performs_handled_effect_no_outer (runtime error instead of static check)
+Test results: 56/56 passing (commit 4b26419)
