@@ -187,30 +187,24 @@ Design decisions:
 
 ### Stage 3: Effect handlers (in progress)
 
-Stack machine implementation with defunctionalized continuations (commit 270ff83):
-- Added `enum Frame` for explicit stack: BinLeft, BinRight, Let, CallArgs,
-  CallBody, If, Block, UnaryMinus, Not, HandleScope, PerformArgs, KCallArg
-- Continuation captures: frames above HandleScope, with pending expression for
-  binary operations
-- k(value) resumes continuation: binds _it, evaluates pending expression
-- Short-circuit evaluation for && and ||
+Stack machine with defunctionalized continuations (commits b4e608d, c1c1c43):
+- enum Frame: BinLeft, BinRight, Let, CallArgs, CallBody, If, Block, UnaryMinus, Not, HandleScope, PerformArgs, KCallArg
+- Continuation: frames above HandleScope as [HandleScope, f_bottom, ..., f_top]
+- k(value): push frames in stored order, State::Return(value)
+- Short-circuit && and ||
+- HandleScope lookup finds scope with matching op clause
 
-Bugs fixed (commit 270ff83):
-- CallArgs next_idx was args.len() - 1 instead of args.len() (wrong arg evaluated)
+Bugs fixed (commits b4e608d, c1c1c43):
+- CallArgs next_idx: new_done.len() not done.len()
 - Block binding: fixed binding order and remaining tracking
-- No-argument function calls handled correctly
+- No-argument function/perform calls handled
+- Effect checking: filtered collect_all_effects for handled effects
+- Clause body effect checking
+- k arity must be 1 (static check error)
 
-Static checks:
-- Handler clause arity must match operation arity
-- Duplicate handler clauses rejected
-- Unknown operations in handler rejected
-- k parameter scope enforcement
+Test results: 52/53 passing (commit c1c1c43)
 
-Test results: 36/53 passing
+Passing: all probe tests, resume_once, abort_*, bool_through_handler,
+same_handler_reused_in_loop, two_arg_op, etc.
 
-Passing tests: resume_once, abort_without_resume, abort_skips_rest_of_block,
-no_perform_executed, trailing_comma_in_clauses, bool_through_handler,
-same_handler_reused_in_loop, etc.
-
-Remaining: probe tests (perform in various contexts), nested handlers,
-outer handler propagation, two-arg operations, deep recursion
+Remaining: reject_clause_performs_handled_effect_no_outer (runtime error instead of static check)

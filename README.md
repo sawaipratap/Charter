@@ -123,9 +123,9 @@ of crashing.
 Stage 2: **complete** (55/55 tests pass). Effect declarations, uses clause,
 perform operations, and static effect checking before running.
 
-Stage 3: **in progress (36/53 tests passing)**.
+Stage 3: **in progress (52/53 tests passing)**.
 Stack machine evaluator with defunctionalized continuations. Stages 0-2 green (198/198).
-Handler clause arity checking, duplicate clause rejection.
+Handler clause arity checking, effect checking for clauses, k arity check.
 
 ## Goals
 
