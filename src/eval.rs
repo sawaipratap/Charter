@@ -6,7 +6,6 @@ use crate::parse::{Expr, BinOp, Function, Program, HandlerClause};
 use crate::lexer;
 use crate::parse;
 use std::collections::HashMap;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 /// Frame limit for recursion depth
@@ -58,12 +57,11 @@ impl std::fmt::Debug for Env {
     }
 }
 
-/// A continuation is a cloneable stack of frames with its environment.
+/// A continuation is a cloneable stack of frames.
+/// Stored as [HandleScope, f_bottom, ..., f_top]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Continuation {
     pub frames: Vec<Frame>,
-    pub env: Rc<RefCell<Env>>,  // Environment at the point of capture (mutable for _it binding)
-    pub pending_expr: Option<Expr>,  // Expression to evaluate when resumed
 }
 
 /// A value in Charter.
@@ -205,7 +203,58 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                             done: Vec::new(),
                             env: env.clone(),
                         });
-                        state = State::Eval(args[0].clone(), env.clone());
+                        if args.is_empty() {
+                            // Zero-argument perform: trigger handler lookup immediately
+                            // by simulating the args-done condition
+                            let value = Value::Integer(0); // Dummy, ignored for zero args
+                            // Pop the frame we just pushed and handle it
+                            let frame = stack.pop().unwrap();
+                            if let Frame::PerformArgs { op, args, done, env } = frame {
+                                // Find handler and capture continuation
+                                let scope_idx = stack.iter().rposition(|f| matches!(f, Frame::HandleScope { .. }));
+                                match scope_idx {
+                                    Some(idx) => {
+                                        let clauses = if let Frame::HandleScope { clauses } = &stack[idx] {
+                                            clauses.clone()
+                                        } else {
+                                            unreachable!();
+                                        };
+                                        
+                                        let clause = match clauses.iter().find(|c| c.op_name == op) {
+                                            Some(c) => c,
+                                            None => return Err(format!("runtime error: no handler for effect '{}'", op)),
+                                        };
+                                        
+                                        // Capture: frames ABOVE the HandleScope
+                                        let above: Vec<Frame> = stack[idx+1..].to_vec();
+                                        let mut captured: Vec<Frame> = vec![];
+                                        captured.push(Frame::HandleScope { clauses: clauses.clone() });
+                                        captured.extend(above);
+                                        
+                                        let k = Value::Continuation(Continuation { frames: captured });
+                                        
+                                        // Build handler env
+                                        let mut handler_env = Env::new();
+                                        for (param, val) in clause.op_params.iter().zip(done.iter()) {
+                                            handler_env.bindings.insert(param.clone(), val.clone());
+                                        }
+                                        handler_env.bindings.insert("k".to_string(), k);
+                                        
+                                        // Remove HandleScope and above
+                                        stack.truncate(idx);
+                                        
+                                        state = State::Eval(clause.body.clone(), Rc::new(handler_env));
+                                    }
+                                    None => {
+                                        return Err(format!("runtime error: effect '{}' performed but not handled", op));
+                                    }
+                                }
+                            } else {
+                                unreachable!();
+                            }
+                        } else {
+                            state = State::Eval(args[0].clone(), env.clone());
+                        }
                     }
                     Expr::Binary(left, op, right) => {
                         stack.push(Frame::BinLeft {
@@ -406,7 +455,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                             state = State::Return(value.clone());
                         }
                         Frame::PerformArgs { op, args, done, env } => {
-                            let mut new_done = done;
+                            let mut new_done = done.clone();
                             new_done.push(value.clone());
                             if new_done.len() == args.len() {
                                 // All args evaluated, find handler
@@ -421,39 +470,24 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                             unreachable!();
                                         };
                                         
-                                        // Capture the continuation: frames ABOVE the HandleScope
-                                        // The "rest of the computation" is whatever is on the stack above HandleScope
-                                        let mut captured: Vec<Frame> = stack[idx+1..].to_vec();
-                                        
-                                        // Build pending expression from captured frames
-                                        // For BinLeft frame: the expression is _it * right
-                                        let pending_expr = if captured.len() == 1 {
-                                            if let Frame::BinLeft { op, right, env: _ } = &captured[0] {
-                                                Some(Expr::Binary(Box::new(Expr::Ident("_it".to_string())), op.clone(), Box::new(right.clone())))
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        };
-                                        
-                                        // The continuation includes HandleScope at the bottom
-                                        captured.push(Frame::HandleScope { clauses: clauses.clone() });
-                                        
                                         // Find the clause first
                                         let clause = match clauses.iter().find(|c| c.op_name == op) {
                                             Some(c) => c,
                                             None => return Err(format!("runtime error: no handler for effect '{}'", op)),
                                         };
                                         
-                                        let k = Value::Continuation(Continuation { 
-                                            frames: captured, 
-                                            env: Rc::new(RefCell::new((*env).clone())),
-                                            pending_expr,
-                                        });
+                                        // Capture: frames ABOVE the HandleScope become [f_bottom, ..., f_top]
+                                        let above: Vec<Frame> = stack[idx+1..].to_vec();
                                         
-                                        // Build handler env
-                                        let mut handler_env = (*env).clone();
+                                        // Build continuation as [HandleScope, f_bottom, ..., f_top]
+                                        let mut captured: Vec<Frame> = vec![];
+                                        captured.push(Frame::HandleScope { clauses: clauses.clone() });
+                                        captured.extend(above);
+                                        
+                                        let k = Value::Continuation(Continuation { frames: captured });
+                                        
+                                        // Build handler env: empty env + params + k
+                                        let mut handler_env = Env::new();
                                         for (param, val) in clause.op_params.iter().zip(new_done.iter()) {
                                             handler_env.bindings.insert(param.clone(), val.clone());
                                         }
@@ -470,7 +504,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                     }
                                 }
                             } else {
-                                let next_idx = new_done.len() - 1;
+                                let next_idx = done.len();
                                 stack.push(Frame::PerformArgs {
                                     op: op.clone(),
                                     args: args.clone(),
@@ -482,26 +516,11 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                         }
                         Frame::KCallArg { cont } => {
                             // k(value) - resume continuation
-                            // Get the continuation's env and bind _it
-                            let base_env = (*cont.env.borrow()).clone();
-                            let resume_env = base_env.insert("_it".to_string(), value.clone());
-                            
-                            // Check if there's a pending expression to evaluate
-                            if let Some(expr) = &cont.pending_expr {
-                                state = State::Eval(expr.clone(), resume_env);
-                            } else if !cont.frames.is_empty() {
-                                // No pending_expr, but we have frames to resume
-                                // Push the continuation frames onto the stack
-                                // Push in reverse order so the first frame ends up on top
-                                for frame in cont.frames.iter().rev() {
-                                    stack.push(frame.clone());
-                                }
-                                // Evaluate with the resume env
-                                state = State::Eval(Expr::Ident("_it".to_string()), resume_env);
-                            } else {
-                                // No pending expression and no frames, just return the value
-                                state = State::Return(value.clone());
+                            // Push captured frames in stored order and return value
+                            for frame in cont.frames.iter() {
+                                stack.push(frame.clone());
                             }
+                            state = State::Return(value.clone());
                         }
                     }
                 } else {
