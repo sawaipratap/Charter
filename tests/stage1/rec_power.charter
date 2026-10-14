@@ -1,0 +1,2 @@
+fn pow(b, e) { if e == 0 { 1 } else { b * pow(b, e - 1) } }
+pow(2, 10)

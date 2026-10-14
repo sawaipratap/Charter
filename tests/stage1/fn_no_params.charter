@@ -1,0 +1,2 @@
+fn five() { 5 }
+five()

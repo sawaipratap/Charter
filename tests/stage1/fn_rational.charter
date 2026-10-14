@@ -1,0 +1,2 @@
+fn half(x) { x / 2 }
+half(3)
