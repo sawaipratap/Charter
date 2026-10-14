@@ -172,6 +172,8 @@ pub fn parse_program(tokens: Vec<Token>) -> Result<Program, String> {
     
     // Effect checking - main expression should use no effects
     check_effects(&main, &functions, &fn_map, &effect_map, &op_map, &HashSet::new())?;
+    // Check clause body effects in main expression (at top level, uses is empty)
+    check_clause_body_effects(&main, &[], &op_map)?;
     for func in &functions {
         check_effects_fn(func, &functions, &fn_map, &effect_map, &op_map)?;
     }

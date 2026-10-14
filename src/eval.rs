@@ -85,7 +85,7 @@ pub enum Frame {
     Block { bindings: Vec<(String, Expr)>, remaining: Vec<(String, Expr)>, body: Expr, env: Rc<Env> },
     UnaryMinus,
     Not,
-    HandleScope { clauses: Vec<HandlerClause> },
+    HandleScope { clauses: Vec<HandlerClause>, env: Rc<Env> },
     PerformArgs { op: String, args: Vec<Expr>, done: Vec<Value>, env: Rc<Env> },
     KCallArg { cont: Continuation },
 }
@@ -212,7 +212,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                             if let Frame::PerformArgs { op, args, done, env } = frame {
                                 // Find handler and capture continuation
                                 let scope_result = stack.iter().rposition(|f| {
-                                    if let Frame::HandleScope { clauses } = f {
+                                    if let Frame::HandleScope { clauses, env: _ } = f {
                                         clauses.iter().any(|c| c.op_name == op)
                                     } else {
                                         false
@@ -220,8 +220,8 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                 });
                                 match scope_result {
                                     Some(idx) => {
-                                        let clauses = if let Frame::HandleScope { clauses } = &stack[idx] {
-                                            clauses.clone()
+                                        let (clauses, scope_env) = if let Frame::HandleScope { clauses, env } = &stack[idx] {
+                                            (clauses.clone(), env.clone())
                                         } else {
                                             unreachable!();
                                         };
@@ -234,13 +234,13 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                         // Capture: frames ABOVE the HandleScope
                                         let above: Vec<Frame> = stack[idx+1..].to_vec();
                                         let mut captured: Vec<Frame> = vec![];
-                                        captured.push(Frame::HandleScope { clauses: clauses.clone() });
+                                        captured.push(Frame::HandleScope { clauses: clauses.clone(), env: scope_env.clone() });
                                         captured.extend(above);
                                         
                                         let k = Value::Continuation(Continuation { frames: captured });
                                         
-                                        // Build handler env
-                                        let mut handler_env = Env::new();
+                                        // Build handler env: scope env + params + k
+                                        let mut handler_env = (*scope_env).clone();
                                         for (param, val) in clause.op_params.iter().zip(done.iter()) {
                                             handler_env.bindings.insert(param.clone(), val.clone());
                                         }
@@ -289,6 +289,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                     Expr::Handle(body, clauses) => {
                         stack.push(Frame::HandleScope {
                             clauses: clauses.clone(),
+                            env: env.clone(),
                         });
                         state = State::Eval((**body).clone(), env.clone());
                     }
@@ -457,7 +458,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                 _ => return Err("runtime error: ! applied to non-boolean".to_string()),
                             }
                         }
-                        Frame::HandleScope { clauses: _ } => {
+                        Frame::HandleScope { clauses: _, env: _ } => {
                             state = State::Return(value.clone());
                         }
                         Frame::PerformArgs { op, args, done, env } => {
@@ -467,7 +468,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                 // All args evaluated, find handler
                                 // Find the nearest HandleScope that has a clause for this op
                                 let scope_result = stack.iter().rposition(|f| {
-                                    if let Frame::HandleScope { clauses } = f {
+                                    if let Frame::HandleScope { clauses, env: _ } = f {
                                         clauses.iter().any(|c| c.op_name == op)
                                     } else {
                                         false
@@ -476,8 +477,8 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                 match scope_result {
                                     Some(idx) => {
                                         // Get the HandleScope data
-                                        let clauses = if let Frame::HandleScope { clauses } = &stack[idx] {
-                                            clauses.clone()
+                                        let (clauses, scope_env) = if let Frame::HandleScope { clauses, env } = &stack[idx] {
+                                            (clauses.clone(), env.clone())
                                         } else {
                                             unreachable!();
                                         };
@@ -493,13 +494,13 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                         
                                         // Build continuation as [HandleScope, f_bottom, ..., f_top]
                                         let mut captured: Vec<Frame> = vec![];
-                                        captured.push(Frame::HandleScope { clauses: clauses.clone() });
+                                        captured.push(Frame::HandleScope { clauses: clauses.clone(), env: scope_env.clone() });
                                         captured.extend(above);
                                         
                                         let k = Value::Continuation(Continuation { frames: captured });
                                         
-                                        // Build handler env: empty env + params + k
-                                        let mut handler_env = Env::new();
+                                        // Build handler env: scope env + params + k
+                                        let mut handler_env = (*scope_env).clone();
                                         for (param, val) in clause.op_params.iter().zip(new_done.iter()) {
                                             handler_env.bindings.insert(param.clone(), val.clone());
                                         }
