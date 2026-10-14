@@ -1001,6 +1001,10 @@ fn check_static(
                         name, func.params.len(), args.len()));
                 }
             }
+            // Check k arity: must be exactly 1
+            if is_continuation && args.len() != 1 {
+                return Err(format!("check error: continuation 'k' expects 1 argument, got {}", args.len()));
+            }
             let mut new_bound = bound_vars.clone();
             for arg in args {
                 new_bound = check_static(arg, functions, fn_map, effect_map, op_map, &new_bound)?;
@@ -1138,7 +1142,61 @@ fn check_effects_fn(
         }
     }
     
+    // Check clause body effects in any Handle expressions in this function
+    check_clause_body_effects(&func.body, &func.uses, op_map)?;
+    
     Ok(())
+}
+
+/// Check that effects performed in handler clause bodies are declared in uses
+fn check_clause_body_effects(
+    expr: &Expr,
+    uses: &[String],
+    op_map: &HashMap<String, (String, usize)>,
+) -> Result<(), String> {
+    match expr {
+        Expr::Handle(_body, clauses) => {
+            // Check each clause body
+            for clause in clauses {
+                check_clause_body_effects(&clause.body, uses, op_map)?;
+            }
+            Ok(())
+        }
+        Expr::Perform(op_name, _args) => {
+            // A perform in a clause body - check if the effect is in uses
+            if let Some((eff_name, _)) = op_map.get(op_name) {
+                if !uses.contains(eff_name) {
+                    return Err(format!("effect error: effect '{}' used but not declared", eff_name));
+                }
+            }
+            Ok(())
+        }
+        Expr::Block(bindings, body) => {
+            for (_, e) in bindings {
+                check_clause_body_effects(e, uses, op_map)?;
+            }
+            check_clause_body_effects(body, uses, op_map)
+        }
+        Expr::Call(_name, args) => {
+            for arg in args {
+                check_clause_body_effects(arg, uses, op_map)?;
+            }
+            Ok(())
+        }
+        Expr::Binary(left, _, right) => {
+            check_clause_body_effects(left, uses, op_map)?;
+            check_clause_body_effects(right, uses, op_map)
+        }
+        Expr::UnaryMinus(inner) | Expr::Not(inner) => {
+            check_clause_body_effects(inner, uses, op_map)
+        }
+        Expr::If(cond, then, else_) => {
+            check_clause_body_effects(cond, uses, op_map)?;
+            check_clause_body_effects(then, uses, op_map)?;
+            check_clause_body_effects(else_, uses, op_map)
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Collect all effects through function calls (transitively)
@@ -1172,15 +1230,10 @@ fn collect_all_effects(
                 collect_all_effects(arg, functions, fn_map, op_map, used, visited)?;
             }
             
-            // Get the called function and collect its effects
+            // Get the called function and add its uses
+            // The function's body effects are checked separately in check_effects_fn
             if let Some(&idx) = fn_map.get(name) {
-                if !visited.insert(name.clone()) {
-                    // Already visited this function, avoid infinite loop
-                    return Ok(());
-                }
                 let called_func = &functions[idx];
-                // Collect effects from the called function's body
-                collect_all_effects(&called_func.body, functions, fn_map, op_map, used, visited)?;
                 // Add the effects declared in the called function's uses clause
                 for eff in &called_func.uses {
                     used.insert(eff.clone());
@@ -1200,11 +1253,78 @@ fn collect_all_effects(
             collect_all_effects(then, functions, fn_map, op_map, used, visited)?;
             collect_all_effects(else_, functions, fn_map, op_map, used, visited)
         }
-        Expr::Handle(body, _clauses) => {
-            // Effects inside a Handle are DISCHARGED by the handler
-            // So we do NOT collect effects from the body or clauses
-            // The handler is responsible for handling them
+        Expr::Handle(body, clauses) => {
+            // Collect the set of effects handled by this handler
+            let handled_effects: HashSet<String> = clauses.iter()
+                .filter_map(|c| op_map.get(&c.op_name).map(|(eff, _)| eff.clone()))
+                .collect();
+            
+            // Recursively collect effects from body, filtering out handled effects
+            collect_all_effects_filtered(body, functions, fn_map, op_map, used, visited, &handled_effects)
+        }
+    }
+}
+
+/// Collect all effects, filtering out handled effects at each Handle
+fn collect_all_effects_filtered(
+    expr: &Expr,
+    functions: &[Function],
+    fn_map: &HashMap<String, usize>,
+    op_map: &HashMap<String, (String, usize)>,
+    used: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+    handled_effects: &HashSet<String>,
+) -> Result<(), String> {
+    match expr {
+        Expr::Number(_) | Expr::Boolean(_) | Expr::Ident(_) => Ok(()),
+        Expr::Perform(op_name, _args) => {
+            if let Some((eff_name, _)) = op_map.get(op_name) {
+                // Only add effect if it's NOT handled
+                if !handled_effects.contains(eff_name) {
+                    used.insert(eff_name.clone());
+                }
+            } else {
+                return Err(format!("check error: unknown operation '{}'", op_name));
+            }
             Ok(())
+        }
+        Expr::Block(bindings, body) => {
+            for (_, e) in bindings {
+                collect_all_effects_filtered(e, functions, fn_map, op_map, used, visited, handled_effects)?;
+            }
+            collect_all_effects_filtered(body, functions, fn_map, op_map, used, visited, handled_effects)
+        }
+        Expr::Call(name, args) => {
+            for arg in args {
+                collect_all_effects_filtered(arg, functions, fn_map, op_map, used, visited, handled_effects)?;
+            }
+            // For function calls inside a Handle, we don't add the function's uses
+            // because they're satisfied by the handler.
+            // The function's body effects and uses are checked separately in check_effects_fn.
+            Ok(())
+        }
+        Expr::Binary(left, _, right) => {
+            collect_all_effects_filtered(left, functions, fn_map, op_map, used, visited, handled_effects)?;
+            collect_all_effects_filtered(right, functions, fn_map, op_map, used, visited, handled_effects)
+        }
+        Expr::UnaryMinus(inner) | Expr::Not(inner) => {
+            collect_all_effects_filtered(inner, functions, fn_map, op_map, used, visited, handled_effects)
+        }
+        Expr::If(cond, then, else_) => {
+            collect_all_effects_filtered(cond, functions, fn_map, op_map, used, visited, handled_effects)?;
+            collect_all_effects_filtered(then, functions, fn_map, op_map, used, visited, handled_effects)?;
+            collect_all_effects_filtered(else_, functions, fn_map, op_map, used, visited, handled_effects)
+        }
+        Expr::Handle(body, clauses) => {
+            // Nested handler: combine handled effects
+            let nested_handled: HashSet<String> = clauses.iter()
+                .filter_map(|c| op_map.get(&c.op_name).map(|(eff, _)| eff.clone()))
+                .collect();
+            let combined: HashSet<String> = handled_effects.iter()
+                .chain(&nested_handled)
+                .cloned()
+                .collect();
+            collect_all_effects_filtered(body, functions, fn_map, op_map, used, visited, &combined)
         }
     }
 }

@@ -211,8 +211,14 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                             let frame = stack.pop().unwrap();
                             if let Frame::PerformArgs { op, args, done, env } = frame {
                                 // Find handler and capture continuation
-                                let scope_idx = stack.iter().rposition(|f| matches!(f, Frame::HandleScope { .. }));
-                                match scope_idx {
+                                let scope_result = stack.iter().rposition(|f| {
+                                    if let Frame::HandleScope { clauses } = f {
+                                        clauses.iter().any(|c| c.op_name == op)
+                                    } else {
+                                        false
+                                    }
+                                });
+                                match scope_result {
                                     Some(idx) => {
                                         let clauses = if let Frame::HandleScope { clauses } = &stack[idx] {
                                             clauses.clone()
@@ -222,7 +228,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                         
                                         let clause = match clauses.iter().find(|c| c.op_name == op) {
                                             Some(c) => c,
-                                            None => return Err(format!("runtime error: no handler for effect '{}'", op)),
+                                            None => unreachable!(),
                                         };
                                         
                                         // Capture: frames ABOVE the HandleScope
@@ -459,9 +465,15 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                             new_done.push(value.clone());
                             if new_done.len() == args.len() {
                                 // All args evaluated, find handler
-                                // Note: PerformArgs is at the TOP of the stack (len-1), not in the stack
-                                let scope_idx = stack.iter().rposition(|f| matches!(f, Frame::HandleScope { .. }));
-                                match scope_idx {
+                                // Find the nearest HandleScope that has a clause for this op
+                                let scope_result = stack.iter().rposition(|f| {
+                                    if let Frame::HandleScope { clauses } = f {
+                                        clauses.iter().any(|c| c.op_name == op)
+                                    } else {
+                                        false
+                                    }
+                                });
+                                match scope_result {
                                     Some(idx) => {
                                         // Get the HandleScope data
                                         let clauses = if let Frame::HandleScope { clauses } = &stack[idx] {
@@ -470,10 +482,10 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                             unreachable!();
                                         };
                                         
-                                        // Find the clause first
+                                        // Find the clause
                                         let clause = match clauses.iter().find(|c| c.op_name == op) {
                                             Some(c) => c,
-                                            None => return Err(format!("runtime error: no handler for effect '{}'", op)),
+                                            None => unreachable!(),
                                         };
                                         
                                         // Capture: frames ABOVE the HandleScope become [f_bottom, ..., f_top]
@@ -504,7 +516,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                     }
                                 }
                             } else {
-                                let next_idx = done.len();
+                                let next_idx = new_done.len();
                                 stack.push(Frame::PerformArgs {
                                     op: op.clone(),
                                     args: args.clone(),
