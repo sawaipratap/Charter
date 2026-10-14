@@ -3,6 +3,10 @@
 use std::env;
 use std::fs;
 use std::process;
+use std::thread;
+
+const STACK_SIZE: usize = 256 * 1024 * 1024; // 256 MB
+const RECURSION_LIMIT: usize = 100_000; // Allow deep recursion
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -22,34 +26,23 @@ fn main() {
     };
 
     // Strip trailing newline if present (test files often end with \n)
-    let source = source.trim_end();
+    let source = source.trim_end().to_string();
 
-    // Lex: text -> tokens
-    let tokens = match charter::lex(source) {
-        Ok(t) => t,
+    // Run the interpreter on a thread with a large stack to handle deep recursion
+    let result = thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(move || {
+            charter::eval_string(&source)
+        })
+        .expect("failed to create thread")
+        .join()
+        .expect("thread panicked");
+
+    match result {
+        Ok(value) => println!("{}", value.display()),
         Err(msg) => {
             eprintln!("{}", msg);
             process::exit(1);
         }
-    };
-
-    // Parse: tokens -> AST
-    let ast = match charter::parse(tokens) {
-        Ok(a) => a,
-        Err(msg) => {
-            eprintln!("{}", msg);
-            process::exit(1);
-        }
-    };
-
-    // Evaluate: AST -> value
-    let value = match charter::eval_program(ast) {
-        Ok(v) => v,
-        Err(msg) => {
-            eprintln!("{}", msg);
-            process::exit(1);
-        }
-    };
-
-    println!("{}", value.display());
+    }
 }

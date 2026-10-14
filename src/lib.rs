@@ -4,7 +4,7 @@ mod eval;
 mod lexer;
 mod parse;
 
-pub use eval::eval_program;
+pub use eval::{eval_program, eval_string};
 pub use lexer::lex;
 pub use parse::{parse, parse_program, Program, Expr, BinOp, Function, Effect, Operation};
 pub use lexer::Token;

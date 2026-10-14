@@ -2,7 +2,11 @@
 
 use crate::parse::{Expr, BinOp, Function, Program};
 use crate::Value;
+use crate::lexer;
+use crate::parse;
 use std::collections::HashMap;
+
+const RECURSION_LIMIT: usize = 100_000;
 
 /// A function value with its closure (captured environment).
 #[derive(Debug, Clone)]
@@ -13,18 +17,28 @@ pub struct FunValue {
 
 /// Evaluate a complete program.
 pub fn eval_program(program: Program) -> Result<Value, String> {
+    eval_with_depth(program, 0)
+}
+
+/// Internal evaluation with recursion depth tracking.
+fn eval_with_depth(program: Program, _depth: usize) -> Result<Value, String> {
     // Build function registry
     let mut functions: HashMap<String, Function> = HashMap::new();
     for func in program.functions {
         functions.insert(func.name.clone(), func);
     }
     
-    // In Stage 2, effects are checked but not executed
-    // The main expression should not use any effects (nothing handles them)
     let env: HashMap<String, Value> = HashMap::new();
     let fn_env: HashMap<String, FunValue> = HashMap::new();
     
-    eval_expr(&program.main, &env, &functions, &fn_env)
+    eval_expr(&program.main, &env, &functions, &fn_env, 0)
+}
+
+/// Evaluate source string.
+pub fn eval_string(source: &str) -> Result<Value, String> {
+    let tokens = lexer::lex(source).map_err(|e| e.to_string())?;
+    let ast = parse::parse(tokens).map_err(|e| e.to_string())?;
+    eval_program(ast)
 }
 
 /// Evaluate an expression and return its value.
@@ -33,7 +47,13 @@ fn eval_expr(
     env: &HashMap<String, Value>,
     functions: &HashMap<String, Function>,
     fn_env: &HashMap<String, FunValue>,
+    depth: usize,
 ) -> Result<Value, String> {
+    // Check recursion limit
+    if depth > RECURSION_LIMIT {
+        return Err("runtime error: recursion limit exceeded".to_string());
+    }
+    
     match expr {
         Expr::Number(n) => Ok(Value::Integer(*n)),
         
@@ -49,11 +69,11 @@ fn eval_expr(
             let mut new_env = env.clone();
             
             for (name, value_expr) in bindings {
-                let value = eval_expr(value_expr, &new_env, functions, fn_env)?;
+                let value = eval_expr(value_expr, &new_env, functions, fn_env, depth + 1)?;
                 new_env.insert(name.clone(), value);
             }
             
-            eval_expr(final_expr, &new_env, functions, fn_env)
+            eval_expr(final_expr, &new_env, functions, fn_env, depth + 1)
         }
         
         Expr::Call(name, args) => {
@@ -66,7 +86,7 @@ fn eval_expr(
             }
             
             let arg_values: Vec<Value> = args.iter()
-                .map(|arg| eval_expr(arg, env, functions, fn_env))
+                .map(|arg| eval_expr(arg, env, functions, fn_env, depth + 1))
                 .collect::<Result<Vec<_>, _>>()?;
             
             let closure = env.clone();
@@ -81,22 +101,21 @@ fn eval_expr(
                 call_env.insert(param.clone(), value);
             }
             
-            // Evaluate function body
-            eval_expr(&func.body, &call_env, functions, fn_env)
+            // Evaluate function body with incremented depth
+            eval_expr(&func.body, &call_env, functions, fn_env, depth + 1)
         }
         
-        Expr::Perform(op_name, args) => {
+        Expr::Perform(op_name, _args) => {
             // In Stage 2, perform doesn't execute - effects are only checked
-            // This should never be reached for valid programs (they're rejected before execution)
             Err(format!("runtime error: effect '{}' performed but not handled", op_name))
         }
         
         Expr::Binary(left, op, right) => {
-            eval_binary(left, op, right, env, functions, fn_env)
+            eval_binary(left, op, right, env, functions, fn_env, depth)
         }
         
         Expr::UnaryMinus(inner) => {
-            let val = eval_expr(inner, env, functions, fn_env)?;
+            let val = eval_expr(inner, env, functions, fn_env, depth + 1)?;
             match val {
                 Value::Integer(n) => Ok(Value::Integer(n.checked_neg()
                     .ok_or_else(|| "runtime error: integer overflow".to_string())?)),
@@ -106,7 +125,7 @@ fn eval_expr(
         }
         
         Expr::Not(inner) => {
-            let val = eval_expr(inner, env, functions, fn_env)?;
+            let val = eval_expr(inner, env, functions, fn_env, depth + 1)?;
             match val {
                 Value::Bool(b) => Ok(Value::Bool(!b)),
                 _ => Err("runtime error: ! applied to non-boolean".to_string()),
@@ -114,10 +133,10 @@ fn eval_expr(
         }
         
         Expr::If(cond, then_branch, else_branch) => {
-            let cond_val = eval_expr(cond, env, functions, fn_env)?;
+            let cond_val = eval_expr(cond, env, functions, fn_env, depth + 1)?;
             match cond_val {
-                Value::Bool(true) => eval_expr(then_branch, env, functions, fn_env),
-                Value::Bool(false) => eval_expr(else_branch, env, functions, fn_env),
+                Value::Bool(true) => eval_expr(then_branch, env, functions, fn_env, depth + 1),
+                Value::Bool(false) => eval_expr(else_branch, env, functions, fn_env, depth + 1),
                 _ => Err("runtime error: if condition must be boolean".to_string()),
             }
         }
@@ -131,14 +150,15 @@ fn eval_binary(
     env: &HashMap<String, Value>,
     functions: &HashMap<String, Function>,
     fn_env: &HashMap<String, FunValue>,
+    depth: usize,
 ) -> Result<Value, String> {
     match op {
         BinOp::And => {
-            let left_val = eval_expr(left, env, functions, fn_env)?;
+            let left_val = eval_expr(left, env, functions, fn_env, depth + 1)?;
             match left_val {
                 Value::Bool(false) => Ok(Value::Bool(false)),
                 Value::Bool(true) => {
-                    let right_val = eval_expr(right, env, functions, fn_env)?;
+                    let right_val = eval_expr(right, env, functions, fn_env, depth + 1)?;
                     match right_val {
                         Value::Bool(b) => Ok(Value::Bool(b)),
                         _ => Err("runtime error: and applied to non-boolean".to_string()),
@@ -148,11 +168,11 @@ fn eval_binary(
             }
         }
         BinOp::Or => {
-            let left_val = eval_expr(left, env, functions, fn_env)?;
+            let left_val = eval_expr(left, env, functions, fn_env, depth + 1)?;
             match left_val {
                 Value::Bool(true) => Ok(Value::Bool(true)),
                 Value::Bool(false) => {
-                    let right_val = eval_expr(right, env, functions, fn_env)?;
+                    let right_val = eval_expr(right, env, functions, fn_env, depth + 1)?;
                     match right_val {
                         Value::Bool(b) => Ok(Value::Bool(b)),
                         _ => Err("runtime error: or applied to non-boolean".to_string()),
@@ -162,8 +182,8 @@ fn eval_binary(
             }
         }
         _ => {
-            let left_val = eval_expr(left, env, functions, fn_env)?;
-            let right_val = eval_expr(right, env, functions, fn_env)?;
+            let left_val = eval_expr(left, env, functions, fn_env, depth + 1)?;
+            let right_val = eval_expr(right, env, functions, fn_env, depth + 1)?;
             
             match op {
                 BinOp::Add => left_val.add(right_val),

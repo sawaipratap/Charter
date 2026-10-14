@@ -139,8 +139,7 @@ Design decisions:
 
 ### Stage 1: Variables, Functions, Recursion, if/else
 
-Built and tested (82/83 tests pass; 1 known limitation: deep recursion >~500
-causes stack overflow due to interpreter architecture). What was added:
+Built and tested (83/83 tests pass). What was added:
 
 - **`src/lexer.rs`** — Extended with keywords (`fn`, `let`, `if`, `else`,
   `true`, `false`), identifiers, multi-character operators (`&&`, `||`,
@@ -159,8 +158,10 @@ Design decisions:
 - **Functions as closures**: capture the environment at definition time.
 - **Static checks**: function existence, arity, chained comparisons detected
   at parse/check time; variable bindings checked statically with scope.
-- **Tail recursion limitation**: interpreter uses native call stack, limiting
-  recursion depth to ~500. The native compiler (Stage 6) will address this.
+- **Deep recursion support**: interpreter runs on a 256 MB stack thread with
+  a recursion limit of 100,000 to handle programs like sum(1000). Returns
+  "runtime error: recursion limit exceeded" instead of crashing for runaway
+  recursion.
 
 ### Stage 2: Effect declarations and checking
 

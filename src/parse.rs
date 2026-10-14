@@ -933,6 +933,13 @@ fn check_effects_fn(
     // Get the uses set for this function
     let uses: HashSet<String> = func.uses.iter().cloned().collect();
     
+    // Check uses are declared FIRST (before checking used effects)
+    for eff in &func.uses {
+        if !effect_map.contains_key(eff) {
+            return Err(format!("check error: undeclared effect '{}' in uses clause", eff));
+        }
+    }
+    
     // Collect all effects used (direct + transitive)
     let mut used_effects: HashSet<String> = HashSet::new();
     let mut visited: HashSet<String> = HashSet::new();
@@ -942,13 +949,6 @@ fn check_effects_fn(
     for eff in &used_effects {
         if !uses.contains(eff) {
             return Err(format!("effect error: effect '{}' used but not declared in '{}'", eff, func.name));
-        }
-    }
-    
-    // Check uses are declared
-    for eff in &func.uses {
-        if !effect_map.contains_key(eff) {
-            return Err(format!("check error: undeclared effect '{}' in uses clause", eff));
         }
     }
     
