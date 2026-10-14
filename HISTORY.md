@@ -106,10 +106,36 @@ interpreter code exists in the repository. What exists:
   Claude to the user (Sawai Pratap Khatri), with the AI co-author line
   removed, at the user's request.
 
+### Stage 0: Lexer, Parser, Evaluator for Arithmetic
+
+Built and tested (55/55 tests pass). What was added:
+
+- **`src/lexer.rs`** — turns raw text into tokens: numbers, operators
+  (`+`, `-`, `*`, `/`), and parentheses. Whitespace is ignored.
+- **`src/parse.rs`** — builds an abstract syntax tree (AST) from tokens.
+  Uses a two-level recursive descent to respect operator precedence
+  (`*` and `/` bind tighter than `+` and `-`), and handles unary minus
+  (which can stack: `--5` equals `5`).
+- **`src/eval.rs`** — walks the AST and produces a value. Division is
+  exact rational arithmetic: `7/2` prints `7/2`, `6/4` simplifies to
+  `3/2`, and `6/3` prints `2`. Negative numbers are stored as rationals
+  with a negative numerator, so `--5` correctly reduces to `5/1`.
+- **`src/lib.rs`** — defines the `Value` enum (`Integer` or `Rational`),
+  the `Expr` AST type, and re-exports `lex`, `parse`, `eval`.
+- **`src/main.rs`** — CLI entry point. `charter run <file>` reads the
+  file, runs it through the pipeline, and prints the result. Errors go
+  to stderr with a prefix (`lex error:`, `parse error:`, `runtime error:`)
+  and exit non-zero.
+
+Design decisions:
+- **Exact rationals**: chosen so Stage 4's probabilistic inference stays
+  exact, not approximate. Uses `i64` for numerator and denominator;
+  overflow is a runtime error.
+- **Two-level precedence**: `parse_expr` handles `+`/`-`, `parse_term`
+  handles `*`/`/`. Clean and extendable if we add more precedence levels.
+- **Rational reduction**: GCD to lowest terms, denominator always positive.
+
 ## What's next
 
-Step 0: build the smallest possible working pipeline — turn text like
-`2 + 3 * 4` into tokens, build a tree out of them respecting
-multiplication-before-addition, and evaluate it to a number. This is where
-actual Rust code starts getting written, one small piece at a time, with
-each piece explained as it's added.
+Step 1: add variables, functions, recursion, and `if`. Meredith is writing
+the tests. Once they commit, I'll build the interpreter against them.

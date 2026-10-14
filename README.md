@@ -110,8 +110,11 @@ that reference exists to check it against.
 
 ## Status
 
-Early design and implementation. Nothing is built yet beyond this
-description — see the stage table above for what's next.
+Stage 0: **complete** (55/55 tests pass). Lexer, parser, evaluator for plain
+arithmetic with exact rational division.
+
+Next: Stage 1 — variables, functions, recursion, `if`. Meredith is writing
+the tests.
 
 ## Goals
 
