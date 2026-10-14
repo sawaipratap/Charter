@@ -1,0 +1,4 @@
+effect Ask { ask(p) }
+effect Log { say(m) }
+fn f() { let ask = 1; ask }
+f()

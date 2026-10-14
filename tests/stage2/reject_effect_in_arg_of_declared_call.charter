@@ -1,0 +1,5 @@
+effect Ask { ask(p) }
+effect Log { say(m) }
+fn a(x) uses [Ask] { perform ask(x) }
+fn b() uses [Ask] { a(perform say(1)) }
+1

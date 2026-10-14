@@ -1,0 +1,5 @@
+effect Ask { ask(p) }
+effect Log { say(m) }
+fn a(n) { b(n) }
+fn b(n) uses [Ask] { if n == 0 { 0 } else { perform ask(n) + a(n - 1) } }
+1

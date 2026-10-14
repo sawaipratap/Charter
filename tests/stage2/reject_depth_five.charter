@@ -1,0 +1,8 @@
+effect Ask { ask(p) }
+effect Log { say(m) }
+fn a() uses [Ask] { perform ask(0) }
+fn b() uses [Ask] { a() }
+fn c() uses [Ask] { b() }
+fn d() uses [Ask] { c() }
+fn e() { d() }
+1
