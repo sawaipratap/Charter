@@ -147,15 +147,14 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                         if bindings.is_empty() {
                             state = State::Eval((**body).clone(), env.clone());
                         } else {
-                            let (name, value_expr) = bindings[0].clone();
-                            let remaining: Vec<_> = bindings[1..].to_vec();
+                            // Push Block frame and evaluate first binding's expression
                             stack.push(Frame::Block {
                                 bindings: bindings.clone(),
-                                remaining,
+                                remaining: bindings.clone(),
                                 body: (**body).clone(),
                                 env: env.clone(),
                             });
-                            state = State::Eval(value_expr, env.clone());
+                            state = State::Eval(bindings[0].1.clone(), env.clone());
                         }
                     }
                     Expr::Call(name, args) => {
@@ -183,14 +182,20 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                 return Err(format!("runtime error: wrong number of arguments to '{}' (expected {}, got {})",
                                     name, func.params.len(), args.len()));
                             }
-                            stack.push(Frame::CallArgs {
-                                name: name.clone(),
-                                params: func.params.clone(),
-                                args: args.clone(),
-                                done: Vec::new(),
-                                env: env.clone(),
-                            });
-                            state = State::Eval(args[0].clone(), env.clone());
+                            if args.is_empty() {
+                                // No arguments, call directly - evaluate body with calling env
+                                // Params are empty so nothing to bind
+                                state = State::Eval(func.body.clone(), env.clone());
+                            } else {
+                                stack.push(Frame::CallArgs {
+                                    name: name.clone(),
+                                    params: func.params.clone(),
+                                    args: args.clone(),
+                                    done: Vec::new(),
+                                    env: env.clone(),
+                                });
+                                state = State::Eval(args[0].clone(), env.clone());
+                            }
                         }
                     }
                     Expr::Perform(op_name, args) => {
@@ -327,7 +332,7 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                                 });
                                 state = State::Eval(func.body.clone(), call_env_rc);
                             } else {
-                                let next_idx = done.len() - 1;
+                                let next_idx = done.len();
                                 stack.push(Frame::CallArgs {
                                     name: name.clone(),
                                     params: params.clone(),
@@ -356,28 +361,26 @@ fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>)
                             }
                         }
                         Frame::Block { bindings, remaining, body, env } => {
-                            if remaining.is_empty() {
-                                // All bindings processed, bind the last value and evaluate body
-                                if bindings.is_empty() {
-                                    // No bindings at all, just evaluate body
-                                    state = State::Eval(body, env);
-                                } else {
-                                    // Bind the first binding's value and evaluate body
-                                    let (name, _) = bindings[0].clone();
-                                    let final_env = env.insert(name, value.clone());
-                                    state = State::Eval(body, final_env);
-                                }
+                            // We've just evaluated the expression for remaining[0]
+                            // Now we need to bind it and either continue with next binding or evaluate body
+                            let (name, _) = remaining[0].clone();
+                            let new_env = env.insert(name, value.clone());
+                            let new_remaining: Vec<_> = remaining[1..].to_vec();
+                            
+                            if new_remaining.is_empty() {
+                                // All bindings done, evaluate body with all bindings in scope
+                                state = State::Eval(body, new_env);
                             } else {
-                                let (name, value_expr) = remaining[0].clone();
-                                let new_remaining: Vec<_> = remaining[1..].to_vec();
-                                let new_env = env.insert(name, value.clone());
+                                // Get the next binding's expression before moving new_remaining
+                                let next_expr = new_remaining[0].1.clone();
+                                // Push new Block frame and evaluate next binding's expression
                                 stack.push(Frame::Block {
-                                    bindings: vec![],
+                                    bindings: bindings.clone(),
                                     remaining: new_remaining,
                                     body: body.clone(),
                                     env: new_env.clone(),
                                 });
-                                state = State::Eval(value_expr, new_env);
+                                state = State::Eval(next_expr, new_env);
                             }
                         }
                         Frame::UnaryMinus => {
