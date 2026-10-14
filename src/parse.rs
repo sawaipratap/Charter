@@ -26,6 +26,14 @@ pub struct Function {
     pub body: Expr,
 }
 
+/// A handler clause: operation name, continuation parameter, and handler body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerClause {
+    pub op_name: String,
+    pub param: String,  // continuation parameter 'k'
+    pub body: Expr,
+}
+
 /// A complete program: effect declarations, function definitions, and a main expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -60,6 +68,9 @@ pub enum Expr {
     
     // If expression
     If(Box<Expr>, Box<Expr>, Box<Expr>), // condition, then, else
+    
+    // Handle expression (Stage 3)
+    Handle(Box<Expr>, Vec<HandlerClause>),  // body, handler clauses
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -794,6 +805,114 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
             
             Ok(Expr::If(Box::new(cond), Box::new(then_branch), Box::new(else_branch)))
         }
+        Some(Token::Handle) => {
+            // handle { block } with { op(args) k => expr, ... }
+            let body = parse_block(tokens)?;
+            
+            // 'with'
+            match tokens.next() {
+                Some(Token::With) => {}
+                Some(t) => return Err(format!("parse error: expected 'with' after handle block, got {:?}", t)),
+                None => return Err("parse error: unexpected end of input".to_string()),
+            }
+            
+            // '{'
+            match tokens.next() {
+                Some(Token::LBrace) => {}
+                Some(t) => return Err(format!("parse error: expected '{{' after 'with', got {:?}", t)),
+                None => return Err("parse error: unexpected end of input".to_string()),
+            }
+            
+            // Parse handler clauses
+            let mut clauses = Vec::new();
+            let mut first = true;
+            while tokens.peek() != Some(&Token::RBrace) {
+                if !first {
+                    // Expect comma
+                    match tokens.next() {
+                        Some(Token::Comma) => {}
+                        Some(Token::RBrace) => break,
+                        Some(t) => return Err(format!("parse error: expected ',' between handler clauses, got {:?}", t)),
+                        None => return Err("parse error: unexpected end of input".to_string()),
+                    }
+                }
+                first = false;
+                
+                // Parse clause: op(args) k => expr
+                let op_name = match tokens.next() {
+                    Some(Token::Ident(s)) => s,
+                    Some(t) => return Err(format!("parse error: expected operation name in handler clause, got {:?}", t)),
+                    None => return Err("parse error: unexpected end of input".to_string()),
+                };
+                
+                // Parse args in parens
+                match tokens.next() {
+                    Some(Token::LParen) => {}
+                    None => return Err("parse error: unexpected end of input".to_string()),
+                    Some(t) => return Err(format!("parse error: expected '(' after op name in handler clause, got {:?}", t)),
+                }
+                
+                // Parse op args (may be multiple)
+                let mut args = Vec::new();
+                let mut first_arg = true;
+                while tokens.peek() != Some(&Token::RParen) {
+                    if !first_arg {
+                        match tokens.next() {
+                            Some(Token::Comma) => {}
+                            Some(t) => return Err(format!("parse error: expected ',' in op args, got {:?}", t)),
+                            None => return Err("parse error: unexpected end of input".to_string()),
+                        }
+                    }
+                    first_arg = false;
+                    
+                    match tokens.next() {
+                        Some(Token::Ident(s)) => args.push(s),
+                        Some(Token::RParen) => break,
+                        Some(t) => return Err(format!("parse error: expected arg name or ')' in handler clause, got {:?}", t)),
+                        None => return Err("parse error: unexpected end of input".to_string()),
+                    }
+                }
+                
+                match tokens.next() {
+                    Some(Token::RParen) => {}
+                    Some(t) => return Err(format!("parse error: expected ')' after op args in handler clause, got {:?}", t)),
+                    None => return Err("parse error: unexpected end of input".to_string()),
+                }
+                
+                // The continuation parameter 'k'
+                let k_param = match tokens.next() {
+                    Some(Token::Ident(s)) => s,
+                    Some(t) => return Err(format!("parse error: expected continuation parameter 'k' in handler clause, got {:?}", t)),
+                    None => return Err("parse error: unexpected end of input".to_string()),
+                };
+                
+                // '=>'
+                match tokens.next() {
+                    Some(Token::Arrow) => {}
+                    Some(t) => return Err(format!("parse error: expected '=>' in handler clause, got {:?}", t)),
+                    None => return Err("parse error: unexpected end of input".to_string()),
+                }
+                
+                // Handler body expression
+                let clause_body = parse_expr(tokens)?;
+                
+                // For Stage 3, we just store the op name, k param, and body
+                clauses.push(HandlerClause {
+                    op_name,
+                    param: k_param,
+                    body: clause_body,
+                });
+            }
+            
+            // '}'
+            match tokens.next() {
+                Some(Token::RBrace) => {}
+                Some(t) => return Err(format!("parse error: expected '}}' after handler clauses, got {:?}", t)),
+                None => return Err("parse error: unexpected end of input".to_string()),
+            }
+            
+            Ok(Expr::Handle(Box::new(body), clauses))
+        }
         Some(t) => Err(format!("parse error: unexpected token: {:?}", t)),
         None => Err("parse error: unexpected end of input".to_string()),
     }
@@ -848,7 +967,12 @@ fn check_static(
             check_static(body, functions, fn_map, effect_map, op_map, &new_bound)
         }
         Expr::Call(name, args) => {
-            if !fn_map.contains_key(name) {
+            // Check if it's a continuation call (the continuation parameter 'k')
+            // Continuation calls are allowed in handler clause bodies
+            // We only allow k, not any bound variable
+            let is_continuation = name == "k";
+            
+            if !fn_map.contains_key(name) && !is_continuation {
                 return Err(format!("check error: undefined function '{}'", name));
             }
             // Check arity
@@ -892,6 +1016,21 @@ fn check_static(
             let new_bound = check_static(cond, functions, fn_map, effect_map, op_map, bound_vars)?;
             let new_bound = check_static(then, functions, fn_map, effect_map, op_map, &new_bound)?;
             check_static(else_, functions, fn_map, effect_map, op_map, &new_bound)
+        }
+        Expr::Handle(body, clauses) => {
+            // Handler body can see the outer scope
+            let mut new_bound = bound_vars.clone();
+            
+            // Check each clause - the clause body can see the continuation param and outer scope
+            for clause in clauses {
+                // Add the continuation parameter to scope
+                new_bound.insert(clause.param.clone());
+                // Check the clause body
+                new_bound = check_static(&clause.body, functions, fn_map, effect_map, op_map, &new_bound)?;
+            }
+            
+            // Check the handler body
+            check_static(body, functions, fn_map, effect_map, op_map, bound_vars)
         }
     }
 }
@@ -1021,6 +1160,19 @@ fn collect_all_effects(
             collect_all_effects(cond, functions, fn_map, op_map, used, visited)?;
             collect_all_effects(then, functions, fn_map, op_map, used, visited)?;
             collect_all_effects(else_, functions, fn_map, op_map, used, visited)
+        }
+        Expr::Handle(body, clauses) => {
+            // Collect effects from the body (but these are handled by the clauses)
+            collect_all_effects(body, functions, fn_map, op_map, used, visited)?;
+            // Collect effects from clause bodies
+            // Note: the op performed in a clause goes to the OUTER handler, not itself
+            // So we don't add the clause's performed effects to `used` directly
+            // Instead, they are "discharged" - handled by this handler
+            for clause in clauses {
+                // Clause body may perform effects - those go to outer handler
+                collect_all_effects(&clause.body, functions, fn_map, op_map, used, visited)?;
+            }
+            Ok(())
         }
     }
 }

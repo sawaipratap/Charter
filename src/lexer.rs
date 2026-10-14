@@ -21,6 +21,11 @@ pub enum Token {
     Effect,
     Uses,
     Perform,
+    Handle,
+    With,
+    
+    // Operators
+    Arrow,  // =>
     
     // Operators
     Plus,
@@ -76,6 +81,8 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
                     "effect" => Token::Effect,
                     "uses" => Token::Uses,
                     "perform" => Token::Perform,
+                    "handle" => Token::Handle,
+                    "with" => Token::With,
                     _ => Token::Ident(ident),
                 };
                 tokens.push(token);
@@ -118,6 +125,9 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
                 if chars.peek() == Some(&'=') {
                     chars.next();
                     tokens.push(Token::Equal);
+                } else if chars.peek() == Some(&'>') {
+                    chars.next();
+                    tokens.push(Token::Arrow);
                 } else {
                     tokens.push(Token::Assign);
                 }

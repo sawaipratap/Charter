@@ -140,6 +140,15 @@ fn eval_expr(
                 _ => Err("runtime error: if condition must be boolean".to_string()),
             }
         }
+        
+        Expr::Handle(body, _clauses) => {
+            // For Stage 3 single-answer:
+            // We need to evaluate the body with handlers installed.
+            // When perform is encountered, find the handler and invoke it.
+            // For now, just evaluate the body since there's no perform.
+            // Handler implementation is pending.
+            eval_expr(body, env, functions, fn_env, depth + 1)
+        }
     }
 }
 
