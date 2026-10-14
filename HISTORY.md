@@ -188,6 +188,15 @@ Design decisions:
 
 ### Stage 3: Effect handlers (in progress)
 
-Parser support added for `handle { block } with { op k => expr, ... }` syntax.
-Evaluator changes pending - need to implement continuation-based handler dispatch.
-Tests: 5/46 passing (basic parsing), remaining tests require full handler implementation.
+Parser support added for `handle { block } with { op(args) k => expr, ... }` syntax:
+- Added Handle, With keywords and Arrow (=>) token to lexer
+- Added HandlerClause struct and Handle variant to Expr enum
+- Handle expression parsing with handler clauses
+
+Static checks added:
+- k parameter added to scope in handler clause bodies
+- k recognized as continuation call in check_static
+- collect_all_effects handles Handle (effects discharged by handler)
+
+Tests: 13/46 passing (parser + basic semantics), 33 tests require full 
+evaluator implementation with continuation-based handler dispatch.

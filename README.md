@@ -121,9 +121,9 @@ Deep recursion supported via large stack thread with recursion limit check.
 Stage 2: **complete** (55/55 tests pass). Effect declarations, uses clause,
 perform operations, and static effect checking before running.
 
-Stage 3: **in progress** (parser done, evaluator pending). Effect handlers
-with single-answer resumption via `handle { block } with { op k => expr }`.
-Tests require full handler implementation.
+Stage 3: **in progress** (parser + static checks done, evaluator pending). 
+Effect handlers with single-answer resumption via `handle { block } with { op(args) k => expr }`.
+Parser and static checks working (13/46 tests pass). Evaluator needs continuation-based dispatch.
 
 ## Goals
 
