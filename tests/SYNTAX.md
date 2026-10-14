@@ -5,7 +5,7 @@ README.md gives only one syntax sample, so the Test Reviewer fixed the rest here
 Test format, CLI and rejection kinds: see stage0/README.md. Kinds are `lex`, `parse`, `check` (static: unbound names, arity, duplicates, unknown effects), `effect` (static: an effect is not declared or not handled; Stage 2 on) and `runtime`. A static error means nothing runs, so stdout stays empty.
 
 ## Stage 1: variables, functions, recursion, if
-- Program = zero or more `fn` definitions, then exactly one final expression whose value is printed. Top-level functions can call each other and themselves in any order. No nested `fn`.
+- Program = `fn` (and later `effect`) definitions plus exactly one top-level expression whose value is printed. Definitions may come before or after that expression (the implementation accepts both; tests only rely on before). Top-level functions can call each other and themselves in any order. No nested `fn`.
 - `fn name(a, b) { block }`. Params may be empty. Duplicate function or parameter names are `check` errors.
 - Block `{ let x = e; let y = e; final_expr }`: each `let` ends with `;`, a block ends with an expression, and a block is itself an expression. `let` may shadow; its right side cannot see the name it defines. Scope is lexical: a function sees only its parameters and its own lets, never the caller's.
 - Values: exact rationals (Stage 0) and booleans `true`/`false`. Prints `true`/`false`.
