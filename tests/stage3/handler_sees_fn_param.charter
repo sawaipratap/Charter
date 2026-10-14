@@ -1,0 +1,3 @@
+effect Ask { ask(p) }
+fn f(n) { handle { perform ask(1) + n } with { ask(p) k => k(n * 2) } }
+f(3)
