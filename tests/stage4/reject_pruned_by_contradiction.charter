@@ -1,0 +1,1 @@
+infer { let a = perform flip(1/2); perform observe(a); perform observe(!a); 1 }

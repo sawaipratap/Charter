@@ -1,0 +1,16 @@
+effect Search { pick(a, b, c), fail() }
+fn solve() uses [Search] {
+  let x = perform pick(1, 2, 3);
+  let y = perform pick(1, 2, 3);
+  if x * y == 6 && x < y { x * 10 + y } else { perform fail() }
+}
+handle { solve() } with {
+  pick(a, b, c) k => {
+    let r1 = k(a);
+    if r1 >= 0 { r1 } else {
+      let r2 = k(b);
+      if r2 >= 0 { r2 } else { k(c) }
+    }
+  },
+  fail() k => 0 - 1
+}

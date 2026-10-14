@@ -32,3 +32,12 @@ Test format, CLI and rejection kinds: see stage0/README.md. Kinds are `lex`, `pa
 - A perform of an op the nearest handler does not handle passes to the next enclosing handler. The innermost handler for an op wins.
 - A clause runs outside its own handler: a `perform` inside a clause goes to the enclosing handlers, not to itself.
 - Effect checking: a `handle` removes the effects of the ops it has clauses for from what its block needs. What is left (including whatever the clauses themselves perform) must still be declared by the enclosing function, or be empty at top level. A clause op that does not exist, or has a different parameter count, is a `check` error; two clauses for one op is a `check` error. A handle only covers code in its own block: a function that performs without declaring it is still an `effect` error even if every call to it is inside a handle.
+
+## Stage 4: multi-answer handlers, exact inference
+- **Multi-shot**: `k` may now be called any number of times in a clause, each call re-running the rest of the block from the `perform` (so side-effect-free code gives each call an independent copy). `k(a) + k(b)` is allowed.
+- **Built-in effect `Prob`** (always declared; list it in `uses [Prob]`; user code cannot redefine the effect `Prob` or the operations below, a `check` error):
+  - `perform flip(p)`: true with probability `p`, false with `1 - p`. `p` must be a number in [0, 1], else `runtime`.
+  - `perform choose(a, b, ...)`: one of the (one or more) arguments, uniformly; equal values pool their weight.
+  - `perform observe(cond)`: keeps only the possibilities where `cond` is true. `cond` must be a bool, else `runtime`.
+- `infer { block }`: runs the block over every possibility, discharging `Prob` (only `Prob`; any other effect must still be handled or declared). Each possibility carries an exact probability; `observe` removes the false ones; the survivors are renormalized to sum to 1. The value of `infer` is a distribution, printed one line per distinct result value as `value: probability`, sorted ascending by value (`false` before `true`, numbers numerically), probabilities as reduced rationals (`1` when certain). Equal values pool their probabilities. If no possibility survives, `runtime` error. A distribution cannot be used in arithmetic or comparisons (`runtime`).
+- Medical-test key example: prior 1% illness, 90% true positive, 5% false positive, observed positive: P(ill) = 0.009 / (0.009 + 0.0495) = 2/13 exactly.

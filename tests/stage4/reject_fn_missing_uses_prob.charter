@@ -1,0 +1,2 @@
+fn f() { perform flip(1/2) }
+infer { f() }

@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { perform toss() - 1 } with { toss() k => k(5) * 100 + k(7) }

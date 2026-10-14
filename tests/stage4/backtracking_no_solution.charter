@@ -1,0 +1,6 @@
+effect Search { pick(a, b, c), fail() }
+fn solve() uses [Search] {
+  let x = perform pick(1, 2, 3);
+  if x > 5 { x } else { perform fail() }
+}
+handle { solve() } with { pick(a, b, c) k => { let r = k(a); if r >= 0 { r } else { let s = k(b); if s >= 0 { s } else { k(c) } } }, fail() k => 0 - 1 }

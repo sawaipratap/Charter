@@ -1,0 +1,2 @@
+effect Ask { ask(p) }
+infer { perform ask(1) }

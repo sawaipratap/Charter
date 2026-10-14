@@ -1,0 +1,2 @@
+effect C { pick3() }
+handle { perform pick3() * 2 } with { pick3() k => k(1) + k(2) + k(3) }

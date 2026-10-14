@@ -1,0 +1,3 @@
+fn f() uses [Prob] { perform flip(1/2) }
+fn g() { f() }
+infer { g() }

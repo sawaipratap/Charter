@@ -1,0 +1,6 @@
+infer {
+  let ill = perform flip(1/100);
+  let pos = if ill { perform flip(9/10) } else { perform flip(1/20) };
+  perform observe(pos);
+  ill
+}

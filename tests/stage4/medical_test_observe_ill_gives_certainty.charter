@@ -1,0 +1,5 @@
+infer {
+  let ill = perform flip(1/100);
+  perform observe(ill);
+  ill
+}

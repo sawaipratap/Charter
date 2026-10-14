@@ -1,0 +1,6 @@
+infer {
+  let x = perform choose(1, 2, 3, 4, 5, 6);
+  let y = perform choose(1, 2, 3, 4, 5, 6);
+  perform observe(x * y == 12 && x < y);
+  x
+}

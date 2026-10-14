@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { perform toss() } with { toss() k => 100 }

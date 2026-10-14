@@ -1,0 +1,9 @@
+fn test_result(ill) uses [Prob] {
+  if ill { perform flip(9/10) } else { perform flip(1/20) }
+}
+infer {
+  let ill = perform flip(1/100);
+  let pos = test_result(ill);
+  perform observe(pos);
+  ill
+}

@@ -1,0 +1,2 @@
+effect Ask { ask(p) }
+infer { handle { perform ask(1) + (if perform flip(1/2) { 1 } else { 0 }) } with { ask(p) k => k(10) } }

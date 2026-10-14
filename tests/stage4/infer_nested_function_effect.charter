@@ -1,0 +1,2 @@
+fn noisy(b) uses [Prob] { if b { perform flip(9/10) } else { perform flip(1/10) } }
+infer { noisy(true) }

@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { perform toss() + perform toss() } with { toss() k => k(0) + k(1) }
