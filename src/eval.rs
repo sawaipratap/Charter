@@ -1,41 +1,114 @@
-//! Evaluator: run an expression and produce a value.
+//! Stack machine evaluator with defunctionalized continuations.
 //!
-//! Stage 3 implements effect handlers using continuation-passing style.
+//! Stage 3 implements effect handlers using a stack machine.
 
 use crate::parse::{Expr, BinOp, Function, Program, HandlerClause};
-use crate::{Value, Continuation};
 use crate::lexer;
 use crate::parse;
 use std::collections::HashMap;
 use std::cell::RefCell;
+use std::rc::Rc;
 
-const RECURSION_LIMIT: usize = 10_000;
+/// Frame limit for recursion depth
+const FRAME_LIMIT: usize = 10_000;
 
-/// Thread-local flag to track if a continuation was invoked
-thread_local! {
-    static CONTINUATION_INVOKED: RefCell<bool> = RefCell::new(false);
-    static IN_RESUMPTION: RefCell<bool> = RefCell::new(false);
-    static HANDLER_FOUND: RefCell<bool> = RefCell::new(false);
+/// An immutable, shareable environment using reference counting.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Env {
+    /// The parent environment (for lexical scoping)
+    parent: Option<Rc<Env>>,
+    /// Bindings in this environment
+    bindings: HashMap<String, Value>,
 }
 
-/// A function value with its closure (captured environment).
-#[derive(Debug, Clone)]
-pub struct FunValue {
-    pub func: Function,
-    pub captured_env: HashMap<String, Value>,
+impl Env {
+    fn new() -> Self {
+        Env {
+            parent: None,
+            bindings: HashMap::new(),
+        }
+    }
+    
+    fn with_parent(parent: Rc<Env>) -> Self {
+        Env {
+            parent: Some(parent),
+            bindings: HashMap::new(),
+        }
+    }
+    
+    fn extend(&self) -> Rc<Env> {
+        Rc::new(Env::with_parent(Rc::new(self.clone())))
+    }
+    
+    fn get(&self, name: &str) -> Option<Value> {
+        self.bindings.get(name).cloned()
+            .or_else(|| self.parent.as_ref().and_then(|p| p.get(name)))
+    }
+    
+    fn insert(&self, name: String, value: Value) -> Rc<Env> {
+        let mut new_env = (*self).clone();
+        new_env.bindings.insert(name, value);
+        Rc::new(new_env)
+    }
+}
+
+impl std::fmt::Debug for Env {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Env")
+    }
+}
+
+/// A continuation is a cloneable stack of frames with its environment.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Continuation {
+    pub frames: Vec<Frame>,
+    pub env: Rc<RefCell<Env>>,  // Environment at the point of capture (mutable for _it binding)
+    pub pending_expr: Option<Expr>,  // Expression to evaluate when resumed
+}
+
+/// A value in Charter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value {
+    Integer(i64),
+    Rational(i64, i64),
+    Bool(bool),
+    Continuation(Continuation),
+}
+
+/// A frame on the evaluation stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Frame {
+    BinLeft { op: BinOp, right: Expr, env: Rc<Env> },
+    BinRight { op: BinOp, left_val: Value },
+    Let { name: String, body: Expr, env: Rc<Env> },
+    CallArgs { name: String, params: Vec<String>, args: Vec<Expr>, done: Vec<Value>, env: Rc<Env> },
+    CallBody { name: String, params: Vec<String>, args_vals: Vec<Value>, closure_env: Rc<Env> },
+    If { then_branch: Expr, else_branch: Expr, env: Rc<Env> },
+    Block { bindings: Vec<(String, Expr)>, remaining: Vec<(String, Expr)>, body: Expr, env: Rc<Env> },
+    UnaryMinus,
+    Not,
+    HandleScope { clauses: Vec<HandlerClause> },
+    PerformArgs { op: String, args: Vec<Expr>, done: Vec<Value>, env: Rc<Env> },
+    KCallArg { cont: Continuation },
+}
+
+/// State of the stack machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum State {
+    Eval(Expr, Rc<Env>),
+    Return(Value),
 }
 
 /// Evaluate a complete program.
 pub fn eval_program(program: Program) -> Result<Value, String> {
-    // Build function registry
     let mut functions: HashMap<String, Function> = HashMap::new();
     for func in program.functions {
         functions.insert(func.name.clone(), func);
     }
     
-    let env: HashMap<String, Value> = HashMap::new();
+    let env = Rc::new(Env::new());
     
-    eval_expr(&program.main, &env, &functions, 0, None)
+    run_machine(&program.main, env, &functions)
 }
 
 /// Evaluate source string.
@@ -45,360 +118,419 @@ pub fn eval_string(source: &str) -> Result<Value, String> {
     eval_program(ast)
 }
 
-/// Evaluate an expression and return its value.
-fn eval_expr(
-    expr: &Expr,
-    env: &HashMap<String, Value>,
-    functions: &HashMap<String, Function>,
-    depth: usize,
-    handler: Option<&Handler>,
-) -> Result<Value, String> {
-    // Check recursion limit
-    if depth > RECURSION_LIMIT {
-        return Err("runtime error: recursion limit exceeded".to_string());
-    }
+/// Run the stack machine iteratively.
+fn run_machine(expr: &Expr, env: Rc<Env>, functions: &HashMap<String, Function>) -> Result<Value, String> {
+    let mut state = State::Eval(expr.clone(), env);
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut call_depth: usize = 0;
     
-    match expr {
-        Expr::Number(n) => Ok(Value::Integer(*n)),
-        
-        Expr::Boolean(b) => Ok(Value::Bool(*b)),
-        
-        Expr::Ident(name) => {
-            if name == "k" {
-                return Err("runtime error: continuation 'k' used as value".to_string());
-            }
-            env.get(name)
-                .cloned()
-                .ok_or_else(|| format!("runtime error: unbound variable '{}'", name))
-        }
-        
-        Expr::Block(bindings, final_expr) => {
-            let mut new_env = env.clone();
-            
-            for (name, value_expr) in bindings {
-                let value = eval_expr(value_expr, &new_env, functions, depth + 1, handler)?;
-                new_env.insert(name.clone(), value);
-            }
-            
-            eval_expr(final_expr, &new_env, functions, depth + 1, handler)
-        }
-        
-        Expr::Call(name, args) => {
-            // Check if 'k' is bound in the environment (continuation call)
-            if name == "k" {
-                if let Some(cont_val) = env.get("k") {
-                    if let Value::Continuation(cont) = cont_val {
-                        if args.len() != 1 {
-                            return Err(format!("runtime error: continuation 'k' expects 1 argument, got {}", args.len()));
+    loop {
+        match &state {
+            State::Eval(e, env) => {
+                match e {
+                    Expr::Number(n) => {
+                        state = State::Return(Value::Integer(*n));
+                    }
+                    Expr::Boolean(b) => {
+                        state = State::Return(Value::Bool(*b));
+                    }
+                    Expr::Ident(name) => {
+                        if name == "k" {
+                            return Err("runtime error: continuation 'k' used as value".to_string());
                         }
-                        // Evaluate the argument
-                        let arg_val = eval_expr(&args[0], env, functions, depth + 1, handler)?;
-                        // Resume the continuation with the argument
-                        return resume_continuation(cont, arg_val, handler);
+                        match env.get(name) {
+                            Some(v) => state = State::Return(v),
+                            None => return Err(format!("runtime error: unbound variable '{}'", name)),
+                        }
+                    }
+                    Expr::Block(bindings, body) => {
+                        if bindings.is_empty() {
+                            state = State::Eval((**body).clone(), env.clone());
+                        } else {
+                            let (name, value_expr) = bindings[0].clone();
+                            let remaining: Vec<_> = bindings[1..].to_vec();
+                            stack.push(Frame::Block {
+                                bindings: bindings.clone(),
+                                remaining,
+                                body: (**body).clone(),
+                                env: env.clone(),
+                            });
+                            state = State::Eval(value_expr, env.clone());
+                        }
+                    }
+                    Expr::Call(name, args) => {
+                        if name == "k" {
+                            if args.len() != 1 {
+                                return Err(format!("runtime error: continuation 'k' expects 1 argument, got {}", args.len()));
+                            }
+                            // Look up k in the environment - it's a Value::Continuation
+                            let k_value = match env.get(name) {
+                                Some(v) => v.clone(),
+                                None => return Err(format!("runtime error: undefined variable '{}'", name)),
+                            };
+                            let cont = match k_value {
+                                Value::Continuation(c) => c,
+                                _ => return Err(format!("runtime error: '{}' is not a continuation", name)),
+                            };
+                            stack.push(Frame::KCallArg { cont });
+                            state = State::Eval(args[0].clone(), env.clone());
+                        } else {
+                            let func = match functions.get(name) {
+                                Some(f) => f,
+                                None => return Err(format!("runtime error: undefined function '{}'", name)),
+                            };
+                            if args.len() != func.params.len() {
+                                return Err(format!("runtime error: wrong number of arguments to '{}' (expected {}, got {})",
+                                    name, func.params.len(), args.len()));
+                            }
+                            stack.push(Frame::CallArgs {
+                                name: name.clone(),
+                                params: func.params.clone(),
+                                args: args.clone(),
+                                done: Vec::new(),
+                                env: env.clone(),
+                            });
+                            state = State::Eval(args[0].clone(), env.clone());
+                        }
+                    }
+                    Expr::Perform(op_name, args) => {
+                        stack.push(Frame::PerformArgs {
+                            op: op_name.clone(),
+                            args: args.clone(),
+                            done: Vec::new(),
+                            env: env.clone(),
+                        });
+                        state = State::Eval(args[0].clone(), env.clone());
+                    }
+                    Expr::Binary(left, op, right) => {
+                        stack.push(Frame::BinLeft {
+                            op: op.clone(),
+                            right: (**right).clone(),
+                            env: env.clone(),
+                        });
+                        state = State::Eval((**left).clone(), env.clone());
+                    }
+                    Expr::UnaryMinus(inner) => {
+                        stack.push(Frame::UnaryMinus);
+                        state = State::Eval((**inner).clone(), env.clone());
+                    }
+                    Expr::Not(inner) => {
+                        stack.push(Frame::Not);
+                        state = State::Eval((**inner).clone(), env.clone());
+                    }
+                    Expr::If(cond, then_branch, else_branch) => {
+                        stack.push(Frame::If {
+                            then_branch: (**then_branch).clone(),
+                            else_branch: (**else_branch).clone(),
+                            env: env.clone(),
+                        });
+                        state = State::Eval((**cond).clone(), env.clone());
+                    }
+                    Expr::Handle(body, clauses) => {
+                        stack.push(Frame::HandleScope {
+                            clauses: clauses.clone(),
+                        });
+                        state = State::Eval((**body).clone(), env.clone());
                     }
                 }
-                return Err("runtime error: continuation 'k' called but not in scope".to_string());
             }
-            
-            // Normal function call
-            let func = functions.get(name)
-                .ok_or_else(|| format!("runtime error: undefined function '{}'", name))?;
-            
-            if args.len() != func.params.len() {
-                return Err(format!("runtime error: wrong number of arguments to '{}' (expected {}, got {})", 
-                    name, func.params.len(), args.len()));
-            }
-            
-            let arg_values: Vec<Value> = args.iter()
-                .map(|arg| eval_expr(arg, env, functions, depth + 1, handler))
-                .collect::<Result<Vec<_>, _>>()?;
-            
-            let closure = env.clone();
-            
-            let fun_val = FunValue {
-                func: func.clone(),
-                captured_env: closure,
-            };
-            
-            let mut call_env = fun_val.captured_env.clone();
-            for (param, value) in func.params.iter().zip(arg_values) {
-                call_env.insert(param.clone(), value);
-            }
-            
-            // Evaluate function body - inherit the handler for lexical scoping
-            eval_expr(&func.body, &call_env, functions, depth + 1, handler)
-        }
-        
-        Expr::Perform(op_name, args) => {
-            // Find the handler for this operation
-            let h = handler.ok_or_else(|| 
-                format!("runtime error: effect '{}' performed but not handled", op_name))?;
-            
-            // Find the matching clause
-            let clause = h.clauses.iter()
-                .find(|c| c.op_name == *op_name)
-                .ok_or_else(|| 
-                    format!("runtime error: no handler for effect '{}'", op_name))?;
-            
-            // Mark that a handler was found
-            HANDLER_FOUND.with(|cell| {
-                *cell.borrow_mut() = true;
-            });
-            
-            // Evaluate the perform arguments
-            let arg_vals: Vec<Value> = args.iter()
-                .map(|arg| eval_expr(arg, env, functions, depth + 1, handler))
-                .collect::<Result<Vec<_>, _>>()?;
-            
-            // Build the handler environment
-            let mut handler_env = env.clone();
-            
-            // The clause's op_params are the operation's parameters (like 'p' in ask(p))
-            for (param, val) in clause.op_params.iter().zip(arg_vals.iter()) {
-                handler_env.insert(param.clone(), val.clone());
-            }
-            
-            // Only create a placeholder continuation if k is not already bound
-            if !handler_env.contains_key("k") {
-                let cont = Continuation {
-                    pending: Expr::Number(0),
-                    env: env.clone(),
-                    functions: functions.clone(),
-                };
-                handler_env.insert("k".to_string(), Value::Continuation(Box::new(cont)));
-            }
-            
-            // Reset the continuation invoked flag for this handler invocation
-            CONTINUATION_INVOKED.with(|cell| {
-                *cell.borrow_mut() = false;
-            });
-            
-            // Evaluate the clause body with the handler environment
-            // Note: we pass the OUTER handler, not this handler
-            let outer_handler = h.outer.as_ref().map(|h| h.as_ref());
-            let result = eval_expr(&clause.body, &handler_env, functions, depth + 1, outer_handler);
-            
-            // Return the result - if a continuation was invoked, the result came from resume_continuation
-            // The Binary case will check the flag
-            result
-        }
-        
-        Expr::Binary(left, op, right) => {
-            // Check if we're in a resumption - if so, evaluate normally without capturing
-            let in_resumption = IN_RESUMPTION.with(|cell| *cell.borrow());
-            
-            if in_resumption {
-                // We're evaluating a continuation's pending expression - evaluate normally
-                return eval_binary_normal(left, op, right, env, functions, depth, handler);
-            }
-            
-            // Create the continuation: it <op> right
-            let cont_expr = Expr::Binary(
-                Box::new(Expr::Ident("_it".to_string())),
-                op.clone(),
-                right.clone(),
-            );
-            
-            let cont = Continuation {
-                pending: cont_expr,
-                env: env.clone(),
-                functions: functions.clone(),
-            };
-            
-            // Build an environment with k bound to the continuation
-            let mut cont_env = env.clone();
-            cont_env.insert("k".to_string(), Value::Continuation(Box::new(cont)));
-            
-            // Reset the continuation invoked flag
-            CONTINUATION_INVOKED.with(|cell| {
-                *cell.borrow_mut() = false;
-            });
-            
-            // Reset the handler found flag
-            HANDLER_FOUND.with(|cell| {
-                *cell.borrow_mut() = false;
-            });
-            
-            // Evaluate left with the continuation in scope
-            let left_result = eval_expr(left, &cont_env, functions, depth + 1, handler);
-            
-            // Check if a continuation was invoked
-            let was_invoked = CONTINUATION_INVOKED.with(|cell| *cell.borrow());
-            
-            if was_invoked {
-                // Continuation was invoked - return the result from resumption
-                left_result
-            } else {
-                // No continuation was invoked
-                // Check if a handler was found (perform happened) or not
-                let handler_found = HANDLER_FOUND.with(|cell| *cell.borrow());
-                
-                if handler_found {
-                    // Handler was found but k was not called (abort case)
-                    // Return the handler's result
-                    left_result
+            State::Return(value) => {
+                if let Some(frame) = stack.pop() {
+                    match frame {
+                        Frame::BinLeft { op, right, env } => {
+                            // Short-circuit evaluation for And/Or
+                            match &op {
+                                BinOp::And => {
+                                    // If left is false, short-circuit and return false
+                                    match &value {
+                                        Value::Bool(false) => {
+                                            state = State::Return(Value::Bool(false));
+                                        }
+                                        Value::Bool(true) => {
+                                            // Evaluate right operand
+                                            stack.push(Frame::BinRight { op: BinOp::And, left_val: value.clone() });
+                                            state = State::Eval(right.clone(), env);
+                                        }
+                                        _ => return Err("runtime error: && requires boolean operands".to_string()),
+                                    }
+                                }
+                                BinOp::Or => {
+                                    // If left is true, short-circuit and return true
+                                    match &value {
+                                        Value::Bool(true) => {
+                                            state = State::Return(Value::Bool(true));
+                                        }
+                                        Value::Bool(false) => {
+                                            // Evaluate right operand
+                                            stack.push(Frame::BinRight { op: BinOp::Or, left_val: value.clone() });
+                                            state = State::Eval(right.clone(), env);
+                                        }
+                                        _ => return Err("runtime error: || requires boolean operands".to_string()),
+                                    }
+                                }
+                                _ => {
+                                    stack.push(Frame::BinRight { op, left_val: value.clone() });
+                                    state = State::Eval(right.clone(), env);
+                                }
+                            }
+                        }
+                        Frame::BinRight { op, left_val } => {
+                            // Handle And/Or for when we evaluated both operands
+                            match &op {
+                                BinOp::And => {
+                                    match (&left_val, &value) {
+                                        (Value::Bool(a), Value::Bool(b)) => {
+                                            state = State::Return(Value::Bool(*a && *b));
+                                        }
+                                        _ => return Err("runtime error: && requires boolean operands".to_string()),
+                                    }
+                                }
+                                BinOp::Or => {
+                                    match (&left_val, &value) {
+                                        (Value::Bool(a), Value::Bool(b)) => {
+                                            state = State::Return(Value::Bool(*a || *b));
+                                        }
+                                        _ => return Err("runtime error: || requires boolean operands".to_string()),
+                                    }
+                                }
+                                _ => {
+                                    state = State::Return(apply_binop(&op, left_val.clone(), value.clone())?);
+                                }
+                            }
+                        }
+                        Frame::Let { name, body, env } => {
+                            let new_env = env.insert(name, value.clone());
+                            state = State::Eval(body, new_env);
+                        }
+                        Frame::CallArgs { name, params, args, mut done, env } => {
+                            done.push(value.clone());
+                            if done.len() == args.len() {
+                                let func = match functions.get(&name) {
+                                    Some(f) => f,
+                                    None => return Err(format!("runtime error: undefined function '{}'", name)),
+                                };
+                                call_depth += 1;
+                                if call_depth > FRAME_LIMIT {
+                                    return Err("runtime error: recursion limit exceeded".to_string());
+                                }
+                                // Create call environment with parameters bound
+                                let mut call_env = (*env).clone();
+                                for (param, val) in params.iter().zip(done.iter()) {
+                                    call_env.bindings.insert(param.clone(), val.clone());
+                                }
+                                let call_env_rc = Rc::new(call_env);
+                                stack.push(Frame::CallBody {
+                                    name: name.clone(),
+                                    params: params.clone(),
+                                    args_vals: done,
+                                    closure_env: call_env_rc.clone(),
+                                });
+                                state = State::Eval(func.body.clone(), call_env_rc);
+                            } else {
+                                let next_idx = done.len() - 1;
+                                stack.push(Frame::CallArgs {
+                                    name: name.clone(),
+                                    params: params.clone(),
+                                    args: args.clone(),
+                                    done,
+                                    env: env.clone(),
+                                });
+                                state = State::Eval(args[next_idx].clone(), env);
+                            }
+                        }
+                        Frame::CallBody { name: _, params: _, args_vals: _, closure_env } => {
+                            call_depth = call_depth.saturating_sub(1);
+                            // The call environment was already set up in CallArgs
+                            // We just need to return from the function
+                            // The return value is in 'value', so we just return it
+                            // Actually, we don't need to do anything here - the function body
+                            // has already been evaluated with the correct environment
+                            // This frame is just a marker for call depth management
+                            state = State::Return(value.clone());
+                        }
+                        Frame::If { then_branch, else_branch, env } => {
+                            match value {
+                                Value::Bool(true) => state = State::Eval(then_branch, env),
+                                Value::Bool(false) => state = State::Eval(else_branch, env),
+                                _ => return Err("runtime error: if condition must be boolean".to_string()),
+                            }
+                        }
+                        Frame::Block { bindings, remaining, body, env } => {
+                            if remaining.is_empty() {
+                                // All bindings processed, bind the last value and evaluate body
+                                if bindings.is_empty() {
+                                    // No bindings at all, just evaluate body
+                                    state = State::Eval(body, env);
+                                } else {
+                                    // Bind the first binding's value and evaluate body
+                                    let (name, _) = bindings[0].clone();
+                                    let final_env = env.insert(name, value.clone());
+                                    state = State::Eval(body, final_env);
+                                }
+                            } else {
+                                let (name, value_expr) = remaining[0].clone();
+                                let new_remaining: Vec<_> = remaining[1..].to_vec();
+                                let new_env = env.insert(name, value.clone());
+                                stack.push(Frame::Block {
+                                    bindings: vec![],
+                                    remaining: new_remaining,
+                                    body: body.clone(),
+                                    env: new_env.clone(),
+                                });
+                                state = State::Eval(value_expr, new_env);
+                            }
+                        }
+                        Frame::UnaryMinus => {
+                            match value {
+                                Value::Integer(n) => {
+                                    let result = n.checked_neg()
+                                        .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+                                    state = State::Return(Value::Integer(result));
+                                }
+                                Value::Rational(num, den) => {
+                                    state = State::Return(Value::Rational(-*num, *den));
+                                }
+                                _ => return Err("runtime error: unary minus applied to non-number".to_string()),
+                            }
+                        }
+                        Frame::Not => {
+                            match value {
+                                Value::Bool(b) => state = State::Return(Value::Bool(!b)),
+                                _ => return Err("runtime error: ! applied to non-boolean".to_string()),
+                            }
+                        }
+                        Frame::HandleScope { clauses: _ } => {
+                            state = State::Return(value.clone());
+                        }
+                        Frame::PerformArgs { op, args, done, env } => {
+                            let mut new_done = done;
+                            new_done.push(value.clone());
+                            if new_done.len() == args.len() {
+                                // All args evaluated, find handler
+                                // Note: PerformArgs is at the TOP of the stack (len-1), not in the stack
+                                let scope_idx = stack.iter().rposition(|f| matches!(f, Frame::HandleScope { .. }));
+                                match scope_idx {
+                                    Some(idx) => {
+                                        // Get the HandleScope data
+                                        let clauses = if let Frame::HandleScope { clauses } = &stack[idx] {
+                                            clauses.clone()
+                                        } else {
+                                            unreachable!();
+                                        };
+                                        
+                                        // Capture the continuation: frames ABOVE the HandleScope
+                                        // The "rest of the computation" is whatever is on the stack above HandleScope
+                                        let mut captured: Vec<Frame> = stack[idx+1..].to_vec();
+                                        
+                                        // Build pending expression from captured frames
+                                        // For BinLeft frame: the expression is _it * right
+                                        let pending_expr = if captured.len() == 1 {
+                                            if let Frame::BinLeft { op, right, env: _ } = &captured[0] {
+                                                Some(Expr::Binary(Box::new(Expr::Ident("_it".to_string())), op.clone(), Box::new(right.clone())))
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        };
+                                        
+                                        // The continuation includes HandleScope at the bottom
+                                        captured.push(Frame::HandleScope { clauses: clauses.clone() });
+                                        
+                                        // Find the clause first
+                                        let clause = match clauses.iter().find(|c| c.op_name == op) {
+                                            Some(c) => c,
+                                            None => return Err(format!("runtime error: no handler for effect '{}'", op)),
+                                        };
+                                        
+                                        let k = Value::Continuation(Continuation { 
+                                            frames: captured, 
+                                            env: Rc::new(RefCell::new((*env).clone())),
+                                            pending_expr,
+                                        });
+                                        
+                                        // Build handler env
+                                        let mut handler_env = (*env).clone();
+                                        for (param, val) in clause.op_params.iter().zip(new_done.iter()) {
+                                            handler_env.bindings.insert(param.clone(), val.clone());
+                                        }
+                                        handler_env.bindings.insert("k".to_string(), k);
+                                        
+                                        // Remove everything from idx onwards (including HandleScope)
+                                        // The PerformArgs frame is already popped by the match
+                                        stack.truncate(idx);
+                                        
+                                        state = State::Eval(clause.body.clone(), Rc::new(handler_env));
+                                    }
+                                    None => {
+                                        return Err(format!("runtime error: effect '{}' performed but not handled", op));
+                                    }
+                                }
+                            } else {
+                                let next_idx = new_done.len() - 1;
+                                stack.push(Frame::PerformArgs {
+                                    op: op.clone(),
+                                    args: args.clone(),
+                                    done: new_done,
+                                    env: env.clone(),
+                                });
+                                state = State::Eval(args[next_idx].clone(), env);
+                            }
+                        }
+                        Frame::KCallArg { cont } => {
+                            // k(value) - resume continuation
+                            // Get the continuation's env and bind _it
+                            let base_env = (*cont.env.borrow()).clone();
+                            let resume_env = base_env.insert("_it".to_string(), value.clone());
+                            
+                            // Check if there's a pending expression to evaluate
+                            if let Some(expr) = &cont.pending_expr {
+                                state = State::Eval(expr.clone(), resume_env);
+                            } else if !cont.frames.is_empty() {
+                                // No pending_expr, but we have frames to resume
+                                // Push the continuation frames onto the stack
+                                // Push in reverse order so the first frame ends up on top
+                                for frame in cont.frames.iter().rev() {
+                                    stack.push(frame.clone());
+                                }
+                                // Evaluate with the resume env
+                                state = State::Eval(Expr::Ident("_it".to_string()), resume_env);
+                            } else {
+                                // No pending expression and no frames, just return the value
+                                state = State::Return(value.clone());
+                            }
+                        }
+                    }
                 } else {
-                    // No handler found - left had no perform, evaluate normally
-                    eval_binary_normal(left, op, right, &cont_env, functions, depth, handler)
+                    return Ok(value.clone());
                 }
             }
-        }
-        
-        Expr::UnaryMinus(inner) => {
-            let val = eval_expr(inner, env, functions, depth + 1, handler)?;
-            match val {
-                Value::Integer(n) => Ok(Value::Integer(n.checked_neg()
-                    .ok_or_else(|| "runtime error: integer overflow".to_string())?)),
-                Value::Rational(num, den) => Ok(Value::Rational(-num, den)),
-                Value::Bool(_) => Err("runtime error: unary minus applied to boolean".to_string()),
-                Value::Continuation(_) => Err("runtime error: unary minus applied to continuation".to_string()),
-            }
-        }
-        
-        Expr::Not(inner) => {
-            let val = eval_expr(inner, env, functions, depth + 1, handler)?;
-            match val {
-                Value::Bool(b) => Ok(Value::Bool(!b)),
-                Value::Continuation(_) => Err("runtime error: ! applied to continuation".to_string()),
-                _ => Err("runtime error: ! applied to non-boolean".to_string()),
-            }
-        }
-        
-        Expr::If(cond, then_branch, else_branch) => {
-            let cond_val = eval_expr(cond, env, functions, depth + 1, handler)?;
-            match cond_val {
-                Value::Bool(true) => eval_expr(then_branch, env, functions, depth + 1, handler),
-                Value::Bool(false) => eval_expr(else_branch, env, functions, depth + 1, handler),
-                Value::Continuation(_) => Err("runtime error: if condition is a continuation".to_string()),
-                _ => Err("runtime error: if condition must be boolean".to_string()),
-            }
-        }
-        
-        Expr::Handle(body, clauses) => {
-            // Create a handler with these clauses
-            let h = Handler {
-                clauses: clauses.clone(),
-                outer: handler.map(|h| Box::new(h.clone())),
-            };
-            
-            // Evaluate the body with this handler installed
-            eval_expr(body, env, functions, depth + 1, Some(&h))
         }
     }
 }
 
-/// Evaluate a binary operation normally (no continuation capture)
-fn eval_binary_normal(
-    left: &Expr,
-    op: &BinOp,
-    right: &Expr,
-    env: &HashMap<String, Value>,
-    functions: &HashMap<String, Function>,
-    depth: usize,
-    handler: Option<&Handler>,
-) -> Result<Value, String> {
+fn apply_binop(op: &BinOp, left: Value, right: Value) -> Result<Value, String> {
     match op {
-        BinOp::And => {
-            let left_val = eval_expr(left, env, functions, depth + 1, handler)?;
-            match left_val {
-                Value::Bool(false) => Ok(Value::Bool(false)),
-                Value::Bool(true) => {
-                    let right_val = eval_expr(right, env, functions, depth + 1, handler)?;
-                    match right_val {
-                        Value::Bool(b) => Ok(Value::Bool(b)),
-                        Value::Continuation(_) => Err("runtime error: and with continuation".to_string()),
-                        _ => Err("runtime error: and applied to non-boolean".to_string()),
-                    }
-                }
-                Value::Continuation(_) => Err("runtime error: and with continuation".to_string()),
-                _ => Err("runtime error: and applied to non-boolean".to_string()),
+        BinOp::Add => left.add(right),
+        BinOp::Sub => left.sub(right),
+        BinOp::Mul => left.mul(right),
+        BinOp::Div => left.div(right),
+        BinOp::Less => compare_values(&left, &right, |a, b| a < b),
+        BinOp::LessEqual => compare_values(&left, &right, |a, b| a <= b),
+        BinOp::Greater => compare_values(&left, &right, |a, b| a > b),
+        BinOp::GreaterEqual => compare_values(&left, &right, |a, b| a >= b),
+        BinOp::Equal => equals_values(&left, &right),
+        BinOp::NotEqual => {
+            let eq = equals_values(&left, &right)?;
+            match eq {
+                Value::Bool(b) => Ok(Value::Bool(!b)),
+                _ => Err("internal error: equals_values returned non-bool".to_string()),
             }
         }
-        BinOp::Or => {
-            let left_val = eval_expr(left, env, functions, depth + 1, handler)?;
-            match left_val {
-                Value::Bool(true) => Ok(Value::Bool(true)),
-                Value::Bool(false) => {
-                    let right_val = eval_expr(right, env, functions, depth + 1, handler)?;
-                    match right_val {
-                        Value::Bool(b) => Ok(Value::Bool(b)),
-                        Value::Continuation(_) => Err("runtime error: or with continuation".to_string()),
-                        _ => Err("runtime error: or applied to non-boolean".to_string()),
-                    }
-                }
-                Value::Continuation(_) => Err("runtime error: or with continuation".to_string()),
-                _ => Err("runtime error: or applied to non-boolean".to_string()),
-            }
-        }
-        _ => {
-            let left_val = eval_expr(left, env, functions, depth + 1, handler)?;
-            let right_val = eval_expr(right, env, functions, depth + 1, handler)?;
-            
-            match op {
-                BinOp::Add => left_val.add(right_val),
-                BinOp::Sub => left_val.sub(right_val),
-                BinOp::Mul => left_val.mul(right_val),
-                BinOp::Div => left_val.div(right_val),
-                BinOp::Less => compare_values(&left_val, &right_val, |a, b| a < b),
-                BinOp::LessEqual => compare_values(&left_val, &right_val, |a, b| a <= b),
-                BinOp::Greater => compare_values(&left_val, &right_val, |a, b| a > b),
-                BinOp::GreaterEqual => compare_values(&left_val, &right_val, |a, b| a >= b),
-                BinOp::Equal => equals_values(&left_val, &right_val),
-                BinOp::NotEqual => {
-                    let eq = equals_values(&left_val, &right_val)?;
-                    match eq {
-                        Value::Bool(b) => Ok(Value::Bool(!b)),
-                        _ => Err("internal error: equals_values returned non-bool".to_string()),
-                    }
-                }
-                BinOp::And | BinOp::Or => unreachable!(),
-            }
+        BinOp::And | BinOp::Or => {
+            Err("internal error: and/or should use short-circuit frames".to_string())
         }
     }
-}
-
-/// Resume execution with a continuation's value.
-fn resume_continuation(cont: &Continuation, value: Value, handler: Option<&Handler>) -> Result<Value, String> {
-    // Mark that the continuation was invoked
-    CONTINUATION_INVOKED.with(|cell| {
-        *cell.borrow_mut() = true;
-    });
-    
-    // Mark that we're in a resumption
-    IN_RESUMPTION.with(|cell| {
-        *cell.borrow_mut() = true;
-    });
-    
-    // Check if this is a placeholder continuation (no pending computation)
-    // Placeholder continuations just return the value passed to k
-    if let Expr::Number(0) = cont.pending {
-        // This is a placeholder - return the value directly
-        IN_RESUMPTION.with(|cell| {
-            *cell.borrow_mut() = false;
-        });
-        return Ok(value);
-    }
-    
-    // Create an environment with '_it' bound to the value
-    let mut new_env = cont.env.clone();
-    new_env.insert("_it".to_string(), value);
-    
-    // Evaluate the pending expression
-    let result = eval_expr(&cont.pending, &new_env, &cont.functions, 0, handler);
-    
-    // Clear the resumption flag
-    IN_RESUMPTION.with(|cell| {
-        *cell.borrow_mut() = false;
-    });
-    
-    result
-}
-
-/// A handler with clauses and an optional outer handler.
-#[derive(Clone)]
-pub struct Handler {
-    pub clauses: Vec<HandlerClause>,
-    pub outer: Option<Box<Handler>>,
 }
 
 fn compare_values<F>(left: &Value, right: &Value, cmp: F) -> Result<Value, String>
@@ -407,16 +539,14 @@ where
 {
     match (left, right) {
         (Value::Integer(a), Value::Integer(b)) => Ok(Value::Bool(cmp(*a as f64, *b as f64))),
-        (Value::Integer(a), Value::Rational(bn, bd)) 
-        | (Value::Rational(bn, bd), Value::Integer(a)) => {
-            let a_rat = *a as f64;
-            let b_rat = *bn as f64 / *bd as f64;
-            Ok(Value::Bool(cmp(a_rat, b_rat)))
+        (Value::Integer(a), Value::Rational(bn, bd)) => {
+            Ok(Value::Bool(cmp(*a as f64, *bn as f64 / *bd as f64)))
+        }
+        (Value::Rational(an, ad), Value::Integer(b)) => {
+            Ok(Value::Bool(cmp(*an as f64 / *ad as f64, *b as f64)))
         }
         (Value::Rational(an, ad), Value::Rational(bn, bd)) => {
-            let a_rat = *an as f64 / *ad as f64;
-            let b_rat = *bn as f64 / *bd as f64;
-            Ok(Value::Bool(cmp(a_rat, b_rat)))
+            Ok(Value::Bool(cmp(*an as f64 / *ad as f64, *bn as f64 / *bd as f64)))
         }
         (Value::Bool(_), _) | (_, Value::Bool(_)) => {
             Err("runtime error: cannot compare boolean values with <, <=, >, >=".to_string())

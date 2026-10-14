@@ -187,31 +187,29 @@ Design decisions:
 
 ### Stage 3: Effect handlers (in progress)
 
-Parser support complete:
-- Added Handle, With keywords and Arrow (=>) token to lexer
-- Added HandlerClause struct and Handle variant to Expr enum
-- Handle expression parsing with handler clauses
-- Trailing commas in handler clauses allowed
-- Empty handler clauses rejected (parse error)
+Stack machine implementation with defunctionalized continuations:
+- Added `enum Frame` for explicit stack: BinLeft, BinRight, Let, CallArgs,
+  CallBody, If, Block, UnaryMinus, Not, HandleScope, PerformArgs, KCallArg
+- Continuation captures: frames above HandleScope, with pending expression for
+  binary operations
+- k(value) resumes continuation: binds _it, evaluates pending expression
+- Short-circuit evaluation for && and ||
+- Fixed division operator bug (rhs.to_rational instead of self.to_rational twice)
+- Fixed block evaluation (bind last value before evaluating body)
+- Fixed function call environment (create call_env with params bound before
+  evaluating function body)
 
-Static checks complete:
-- k parameter added to scope in handler clause bodies
-- k only visible in handler clause bodies (not handle body)
-- k recognized as continuation call in check_static
-- collect_all_effects handles Handle (effects discharged by handler)
+Static checks:
+- Handler clause arity must match operation arity
+- Duplicate handler clauses rejected
+- Unknown operations in handler rejected
+- k parameter scope enforcement
 
-Evaluator implementation (continuation-passing style):
-- Thread-local flags: CONTINUATION_INVOKED, IN_RESUMPTION, HANDLER_FOUND
-- Binary expressions capture continuations: `it <op> right`
-- When k(value) is called, continuation is resumed with value
-- HANDLER_FOUND tracks if handler was found for abort detection
-- Placeholder continuation for non-binary perform points
-- Handler inheritance in function calls for lexical scoping
-
-Tests: 35/46 passing (up from 19)
+Tests: 34/53 passing
 
 Passing tests: resume_once, abort_without_resume, abort_skips_rest_of_block,
-no_perform_executed, trailing_comma_in_clauses, bool_through_handler, etc.
+no_perform_executed, trailing_comma_in_clauses, bool_through_handler,
+same_handler_reused_in_loop, etc.
 
-Remaining: arity checking for handler clauses, duplicate clause detection,
-nested handlers, outer handler propagation for unhandled effects.
+Remaining: probe tests (perform in various contexts), nested handlers,
+outer handler propagation, two-arg operations, deep recursion

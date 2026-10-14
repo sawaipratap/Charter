@@ -6,43 +6,10 @@ mod eval;
 mod lexer;
 mod parse;
 
-pub use eval::{eval_program, eval_string};
+pub use eval::{eval_program, eval_string, Value, Continuation};
 pub use lexer::lex;
 pub use parse::{parse, parse_program, Program, Expr, BinOp, Function, Effect, Operation};
 pub use lexer::Token;
-
-/// A continuation for effect handlers (Stage 3).
-/// Captures the rest of the computation after a perform.
-/// When k(value) is called, the continuation is resumed with value.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Continuation {
-    /// The pending expression to evaluate after receiving the value
-    pub pending: Expr,
-    /// The environment at the point of perform
-    pub env: HashMap<String, Value>,
-    /// The functions registry for the continuation
-    pub functions: HashMap<String, Function>,
-}
-
-
-
-impl std::fmt::Debug for Continuation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Continuation")
-            .field("pending", &"<expr>")
-            .field("env", &"<env>")
-            .finish()
-    }
-}
-
-/// A value in Charter: an integer, exact rational, boolean, or continuation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value {
-    Integer(i64),
-    Rational(i64, i64), // numerator, denominator (denominator always > 0)
-    Bool(bool),
-    Continuation(Box<Continuation>),
-}
 
 impl Value {
     pub fn add(self, rhs: Value) -> Result<Value, String> {

@@ -1038,9 +1038,26 @@ fn check_static(
         Expr::Handle(body, clauses) => {
             // Handler body can see the outer scope
             let mut new_bound = bound_vars.clone();
+            let mut seen_ops: HashSet<String> = HashSet::new();
             
             // Check each clause - the clause body can see the continuation param, op params, and outer scope
             for clause in clauses {
+                // Check for duplicate clauses
+                if seen_ops.contains(&clause.op_name) {
+                    return Err(format!("check error: handler for '{}' defined multiple times", clause.op_name));
+                }
+                seen_ops.insert(clause.op_name.clone());
+                
+                // Check handler clause arity matches operation arity
+                if let Some((_, expected_arity)) = op_map.get(&clause.op_name) {
+                    if clause.op_params.len() != *expected_arity {
+                        return Err(format!("check error: handler for '{}' has {} parameters but operation expects {}",
+                            clause.op_name, clause.op_params.len(), expected_arity));
+                    }
+                } else {
+                    return Err(format!("check error: handler for unknown operation '{}'", clause.op_name));
+                }
+                
                 // Add the op params to scope (e.g., 'p' in ask(p))
                 for param in &clause.op_params {
                     new_bound.insert(param.clone());
