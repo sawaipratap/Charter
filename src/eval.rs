@@ -15,6 +15,7 @@ const RECURSION_LIMIT: usize = 10_000;
 thread_local! {
     static CONTINUATION_INVOKED: RefCell<bool> = RefCell::new(false);
     static IN_RESUMPTION: RefCell<bool> = RefCell::new(false);
+    static HANDLER_FOUND: RefCell<bool> = RefCell::new(false);
 }
 
 /// A function value with its closure (captured environment).
@@ -139,6 +140,11 @@ fn eval_expr(
                 .ok_or_else(|| 
                     format!("runtime error: no handler for effect '{}'", op_name))?;
             
+            // Mark that a handler was found
+            HANDLER_FOUND.with(|cell| {
+                *cell.borrow_mut() = true;
+            });
+            
             // Evaluate the perform arguments
             let arg_vals: Vec<Value> = args.iter()
                 .map(|arg| eval_expr(arg, env, functions, depth + 1, handler))
@@ -208,6 +214,11 @@ fn eval_expr(
                 *cell.borrow_mut() = false;
             });
             
+            // Reset the handler found flag
+            HANDLER_FOUND.with(|cell| {
+                *cell.borrow_mut() = false;
+            });
+            
             // Evaluate left with the continuation in scope
             let left_result = eval_expr(left, &cont_env, functions, depth + 1, handler);
             
@@ -215,20 +226,20 @@ fn eval_expr(
             let was_invoked = CONTINUATION_INVOKED.with(|cell| *cell.borrow());
             
             if was_invoked {
-                // Continuation was invoked and resumed. The result is in left_result.
-                // Return it directly without evaluating the rest of the binary.
+                // Continuation was invoked - return the result from resumption
                 left_result
             } else {
-                // Continuation was NOT invoked
-                // This means either:
-                // 1. Left had no perform - evaluate normally
-                // 2. Left had a perform but handler didn't call k - return handler's result (abort)
-                match left_result {
-                    Ok(_left_val) => {
-                        // Evaluate the binary normally
-                        eval_binary_normal(left, op, right, env, functions, depth, handler)
-                    }
-                    Err(e) => Err(e),
+                // No continuation was invoked
+                // Check if a handler was found (perform happened) or not
+                let handler_found = HANDLER_FOUND.with(|cell| *cell.borrow());
+                
+                if handler_found {
+                    // Handler was found but k was not called (abort case)
+                    // Return the handler's result
+                    left_result
+                } else {
+                    // No handler found - left had no perform, evaluate normally
+                    eval_binary_normal(left, op, right, &cont_env, functions, depth, handler)
                 }
             }
         }
@@ -357,6 +368,16 @@ fn resume_continuation(cont: &Continuation, value: Value, handler: Option<&Handl
     IN_RESUMPTION.with(|cell| {
         *cell.borrow_mut() = true;
     });
+    
+    // Check if this is a placeholder continuation (no pending computation)
+    // Placeholder continuations just return the value passed to k
+    if let Expr::Number(0) = cont.pending {
+        // This is a placeholder - return the value directly
+        IN_RESUMPTION.with(|cell| {
+            *cell.borrow_mut() = false;
+        });
+        return Ok(value);
+    }
     
     // Create an environment with '_it' bound to the value
     let mut new_env = cont.env.clone();
