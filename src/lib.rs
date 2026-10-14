@@ -13,25 +13,24 @@ pub use lexer::Token;
 
 /// A continuation for effect handlers (Stage 3).
 /// Captures the rest of the computation after a perform.
+/// When k(value) is called, the continuation is resumed with value.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Continuation {
-    /// The expression to evaluate after receiving the continuation's value
-    pub expr: Expr,
+    /// The pending expression to evaluate after receiving the value
+    pub pending: Expr,
     /// The environment at the point of perform
     pub env: HashMap<String, Value>,
-    /// The functions registry
+    /// The functions registry for the continuation
     pub functions: HashMap<String, Function>,
-    /// The depth when the continuation was created
-    pub depth: usize,
 }
+
+
 
 impl std::fmt::Debug for Continuation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Continuation")
-            .field("expr", &"<expr>")
+            .field("pending", &"<expr>")
             .field("env", &"<env>")
-            .field("functions", &"<functions>")
-            .field("depth", &self.depth)
             .finish()
     }
 }

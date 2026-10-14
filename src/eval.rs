@@ -1,16 +1,21 @@
 //! Evaluator: run an expression and produce a value.
 //!
 //! Stage 3 implements effect handlers using continuation-passing style.
-//! Continutations are heap-allocated and stored in the environment as
-//! special function-like values.
 
 use crate::parse::{Expr, BinOp, Function, Program, HandlerClause};
 use crate::{Value, Continuation};
 use crate::lexer;
 use crate::parse;
 use std::collections::HashMap;
+use std::cell::RefCell;
 
 const RECURSION_LIMIT: usize = 10_000;
+
+/// Thread-local flag to track if a continuation was invoked
+thread_local! {
+    static CONTINUATION_INVOKED: RefCell<bool> = RefCell::new(false);
+    static IN_RESUMPTION: RefCell<bool> = RefCell::new(false);
+}
 
 /// A function value with its closure (captured environment).
 #[derive(Debug, Clone)]
@@ -58,7 +63,6 @@ fn eval_expr(
         Expr::Boolean(b) => Ok(Value::Bool(*b)),
         
         Expr::Ident(name) => {
-            // Check if this is a continuation call (k(value))
             if name == "k" {
                 return Err("runtime error: continuation 'k' used as value".to_string());
             }
@@ -89,7 +93,7 @@ fn eval_expr(
                         // Evaluate the argument
                         let arg_val = eval_expr(&args[0], env, functions, depth + 1, handler)?;
                         // Resume the continuation with the argument
-                        return resume_continuation(cont, arg_val);
+                        return resume_continuation(cont, arg_val, handler);
                     }
                 }
                 return Err("runtime error: continuation 'k' called but not in scope".to_string());
@@ -140,33 +144,93 @@ fn eval_expr(
                 .map(|arg| eval_expr(arg, env, functions, depth + 1, handler))
                 .collect::<Result<Vec<_>, _>>()?;
             
-            // Create a continuation for the rest of computation
-            // The continuation captures the current state so we can resume
-            let cont = Continuation {
-                expr: Expr::Number(0), // Placeholder - not used for single-answer
-                env: env.clone(),
-                functions: functions.clone(),
-                depth,
-            };
-            
             // Build the handler environment
-            // k is bound to the continuation
             let mut handler_env = env.clone();
-            handler_env.insert("k".to_string(), Value::Continuation(Box::new(cont)));
             
             // The clause's op_params are the operation's parameters (like 'p' in ask(p))
-            // These are bound to the evaluated arguments
             for (param, val) in clause.op_params.iter().zip(arg_vals.iter()) {
                 handler_env.insert(param.clone(), val.clone());
             }
             
+            // Only create a placeholder continuation if k is not already bound
+            if !handler_env.contains_key("k") {
+                let cont = Continuation {
+                    pending: Expr::Number(0),
+                    env: env.clone(),
+                    functions: functions.clone(),
+                };
+                handler_env.insert("k".to_string(), Value::Continuation(Box::new(cont)));
+            }
+            
+            // Reset the continuation invoked flag for this handler invocation
+            CONTINUATION_INVOKED.with(|cell| {
+                *cell.borrow_mut() = false;
+            });
+            
             // Evaluate the clause body with the handler environment
-            // The handler body is evaluated with the SAME handler (for nested performs)
-            eval_expr(&clause.body, &handler_env, functions, depth + 1, handler)
+            // Note: we pass the OUTER handler, not this handler
+            let outer_handler = h.outer.as_ref().map(|h| h.as_ref());
+            let result = eval_expr(&clause.body, &handler_env, functions, depth + 1, outer_handler);
+            
+            // Return the result - if a continuation was invoked, the result came from resume_continuation
+            // The Binary case will check the flag
+            result
         }
         
         Expr::Binary(left, op, right) => {
-            eval_binary(left, op, right, env, functions, depth, handler)
+            // Check if we're in a resumption - if so, evaluate normally without capturing
+            let in_resumption = IN_RESUMPTION.with(|cell| *cell.borrow());
+            
+            if in_resumption {
+                // We're evaluating a continuation's pending expression - evaluate normally
+                return eval_binary_normal(left, op, right, env, functions, depth, handler);
+            }
+            
+            // Create the continuation: it <op> right
+            let cont_expr = Expr::Binary(
+                Box::new(Expr::Ident("_it".to_string())),
+                op.clone(),
+                right.clone(),
+            );
+            
+            let cont = Continuation {
+                pending: cont_expr,
+                env: env.clone(),
+                functions: functions.clone(),
+            };
+            
+            // Build an environment with k bound to the continuation
+            let mut cont_env = env.clone();
+            cont_env.insert("k".to_string(), Value::Continuation(Box::new(cont)));
+            
+            // Reset the continuation invoked flag
+            CONTINUATION_INVOKED.with(|cell| {
+                *cell.borrow_mut() = false;
+            });
+            
+            // Evaluate left with the continuation in scope
+            let left_result = eval_expr(left, &cont_env, functions, depth + 1, handler);
+            
+            // Check if a continuation was invoked
+            let was_invoked = CONTINUATION_INVOKED.with(|cell| *cell.borrow());
+            
+            if was_invoked {
+                // Continuation was invoked and resumed. The result is in left_result.
+                // Return it directly without evaluating the rest of the binary.
+                left_result
+            } else {
+                // Continuation was NOT invoked
+                // This means either:
+                // 1. Left had no perform - evaluate normally
+                // 2. Left had a perform but handler didn't call k - return handler's result (abort)
+                match left_result {
+                    Ok(_left_val) => {
+                        // Evaluate the binary normally
+                        eval_binary_normal(left, op, right, env, functions, depth, handler)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
         }
         
         Expr::UnaryMinus(inner) => {
@@ -194,6 +258,7 @@ fn eval_expr(
             match cond_val {
                 Value::Bool(true) => eval_expr(then_branch, env, functions, depth + 1, handler),
                 Value::Bool(false) => eval_expr(else_branch, env, functions, depth + 1, handler),
+                Value::Continuation(_) => Err("runtime error: if condition is a continuation".to_string()),
                 _ => Err("runtime error: if condition must be boolean".to_string()),
             }
         }
@@ -211,23 +276,8 @@ fn eval_expr(
     }
 }
 
-/// Resume execution with a continuation's value.
-/// This is used when a continuation k(value) is called.
-fn resume_continuation(cont: &Continuation, value: Value) -> Result<Value, String> {
-    // For Stage 3 single-answer, the continuation just passes through its argument
-    // The continuation captures the environment but the actual continuation logic
-    // is handled by how the clause body is structured
-    Ok(value)
-}
-
-/// A handler with clauses and an optional outer handler.
-#[derive(Clone)]
-pub struct Handler {
-    pub clauses: Vec<HandlerClause>,
-    pub outer: Option<Box<Handler>>,
-}
-
-fn eval_binary(
+/// Evaluate a binary operation normally (no continuation capture)
+fn eval_binary_normal(
     left: &Expr,
     op: &BinOp,
     right: &Expr,
@@ -245,9 +295,11 @@ fn eval_binary(
                     let right_val = eval_expr(right, env, functions, depth + 1, handler)?;
                     match right_val {
                         Value::Bool(b) => Ok(Value::Bool(b)),
+                        Value::Continuation(_) => Err("runtime error: and with continuation".to_string()),
                         _ => Err("runtime error: and applied to non-boolean".to_string()),
                     }
                 }
+                Value::Continuation(_) => Err("runtime error: and with continuation".to_string()),
                 _ => Err("runtime error: and applied to non-boolean".to_string()),
             }
         }
@@ -259,9 +311,11 @@ fn eval_binary(
                     let right_val = eval_expr(right, env, functions, depth + 1, handler)?;
                     match right_val {
                         Value::Bool(b) => Ok(Value::Bool(b)),
+                        Value::Continuation(_) => Err("runtime error: or with continuation".to_string()),
                         _ => Err("runtime error: or applied to non-boolean".to_string()),
                     }
                 }
+                Value::Continuation(_) => Err("runtime error: or with continuation".to_string()),
                 _ => Err("runtime error: or applied to non-boolean".to_string()),
             }
         }
@@ -292,6 +346,40 @@ fn eval_binary(
     }
 }
 
+/// Resume execution with a continuation's value.
+fn resume_continuation(cont: &Continuation, value: Value, handler: Option<&Handler>) -> Result<Value, String> {
+    // Mark that the continuation was invoked
+    CONTINUATION_INVOKED.with(|cell| {
+        *cell.borrow_mut() = true;
+    });
+    
+    // Mark that we're in a resumption
+    IN_RESUMPTION.with(|cell| {
+        *cell.borrow_mut() = true;
+    });
+    
+    // Create an environment with '_it' bound to the value
+    let mut new_env = cont.env.clone();
+    new_env.insert("_it".to_string(), value);
+    
+    // Evaluate the pending expression
+    let result = eval_expr(&cont.pending, &new_env, &cont.functions, 0, handler);
+    
+    // Clear the resumption flag
+    IN_RESUMPTION.with(|cell| {
+        *cell.borrow_mut() = false;
+    });
+    
+    result
+}
+
+/// A handler with clauses and an optional outer handler.
+#[derive(Clone)]
+pub struct Handler {
+    pub clauses: Vec<HandlerClause>,
+    pub outer: Option<Box<Handler>>,
+}
+
 fn compare_values<F>(left: &Value, right: &Value, cmp: F) -> Result<Value, String>
 where
     F: FnOnce(f64, f64) -> bool,
@@ -312,7 +400,9 @@ where
         (Value::Bool(_), _) | (_, Value::Bool(_)) => {
             Err("runtime error: cannot compare boolean values with <, <=, >, >=".to_string())
         }
-        _ => Err("runtime error: cannot use continuation in comparison".to_string()),
+        (Value::Continuation(_), _) | (_, Value::Continuation(_)) => {
+            Err("runtime error: cannot use continuation in comparison".to_string())
+        }
     }
 }
 
