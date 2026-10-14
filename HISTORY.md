@@ -187,15 +187,30 @@ Design decisions:
 
 ### Stage 3: Effect handlers (in progress)
 
-Parser support added for `handle { block } with { op(args) k => expr, ... }` syntax:
+Parser support complete:
 - Added Handle, With keywords and Arrow (=>) token to lexer
 - Added HandlerClause struct and Handle variant to Expr enum
 - Handle expression parsing with handler clauses
+- Trailing commas in handler clauses allowed
+- Empty handler clauses rejected (parse error)
 
-Static checks added:
+Static checks complete:
 - k parameter added to scope in handler clause bodies
+- k only visible in handler clause bodies (not handle body)
 - k recognized as continuation call in check_static
 - collect_all_effects handles Handle (effects discharged by handler)
 
-Tests: 13/46 passing (parser + basic semantics), 33 tests require full 
-evaluator implementation with continuation-based handler dispatch.
+Evaluator implementation (continuation-passing style):
+- Thread-local flags track continuation invocation and resumption
+- Binary expressions capture continuations: `it <op> right`
+- When k(value) is called, continuation is resumed with value
+- IN_RESUMPTION flag prevents nested continuation capture
+- Handler inheritance in function calls for lexical scoping
+
+Tests: 19/46 passing
+
+Passing tests: resume_once, abort_without_resume, no_perform_executed,
+same_handler_reused_in_loop, trailing_comma_in_clauses, etc.
+
+Remaining: arity checking for handler clauses, duplicate clause detection,
+nested handlers, outer handler propagation for unhandled effects.
