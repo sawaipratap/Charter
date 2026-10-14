@@ -15,5 +15,5 @@ Each test is a pair of files with the same base name:
 - Operators: `+ - * /`, unary `-`, parentheses. `* /` bind tighter than `+ -`; all binary operators are left-associative; unary `-` can stack (`--5` is 5).
 - Numbers are non-negative integer literals (digits only). No decimals, no variables, no `**`.
 - **Division is exact (rational numbers), ASSUMPTION pending god's sign-off**: `7 / 2` prints `7/2`, `6 / 4` prints `3/2`, a whole result prints as an integer (`6 / 3` is `2`). Chosen so Stage 4 can give the exact posterior. Division by zero is a `runtime` rejection.
-- Integer overflow is deliberately untested; the engineer should use big or checked integers and report the choice.
+- **Overflow is a runtime error**: numerators and denominators are checked 64-bit signed integers; any result outside that range is a `runtime` rejection. An integer literal above 9223372036854775807 is a `lex` rejection. (Added after god approved the rational design; the earlier "untested" note is withdrawn.)
 - Comments do not exist yet, so no test uses them.
