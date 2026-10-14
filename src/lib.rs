@@ -1,38 +1,39 @@
 //! Charter: a programming language where function signatures declare effects.
-//!
-//! This library provides the core parsing and evaluation machinery.
-//! The CLI binary lives in `src/main.rs`.
 
 mod eval;
 mod lexer;
 mod parse;
 
-pub use eval::eval;
+pub use eval::eval_program;
 pub use lexer::lex;
-pub use parse::parse;
+pub use parse::{parse, parse_program, Program, Expr, BinOp, Function};
+pub use lexer::Token;
 
-/// A value in Charter's Stage 0: either an integer or an exact rational.
+/// A value in Charter: an integer, exact rational, or boolean.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Integer(i64),
     Rational(i64, i64), // numerator, denominator (denominator always > 0)
+    Bool(bool),
 }
 
 impl Value {
-    /// Evaluate a binary operation on two values.
+    /// Evaluate a binary operation on two values (Stage 0 compatibility).
     pub fn apply_op(self, op: char, rhs: Value) -> Result<Value, String> {
+        let op = BinOp::from_char(op)
+            .ok_or_else(|| format!("unknown operator '{}'", op))?;
         match op {
-            '+' => self.add(rhs),
-            '-' => self.sub(rhs),
-            '*' => self.mul(rhs),
-            '/' => self.div(rhs),
-            _ => Err(format!("unknown operator '{}'", op)),
+            BinOp::Add => self.add(rhs),
+            BinOp::Sub => self.sub(rhs),
+            BinOp::Mul => self.mul(rhs),
+            BinOp::Div => self.div(rhs),
+            _ => Err(format!("operator {:?} not supported in apply_op", op)),
         }
     }
 
-    fn add(self, rhs: Value) -> Result<Value, String> {
-        let a = self.to_rational();
-        let b = rhs.to_rational();
+    pub fn add(self, rhs: Value) -> Result<Value, String> {
+        let a = self.to_rational()?;
+        let b = rhs.to_rational()?;
         let num = a.0.checked_mul(a.1)
             .and_then(|a_num| b.0.checked_mul(b.1).and_then(|b_num| a_num.checked_add(b_num)))
             .ok_or_else(|| "runtime error: integer overflow".to_string())?;
@@ -41,9 +42,9 @@ impl Value {
         Ok(Value::reduce(num, den))
     }
 
-    fn sub(self, rhs: Value) -> Result<Value, String> {
-        let a = self.to_rational();
-        let b = rhs.to_rational();
+    pub fn sub(self, rhs: Value) -> Result<Value, String> {
+        let a = self.to_rational()?;
+        let b = rhs.to_rational()?;
         let num = a.0.checked_mul(a.1)
             .and_then(|a_num| b.0.checked_mul(b.1).and_then(|b_num| a_num.checked_sub(b_num)))
             .ok_or_else(|| "runtime error: integer overflow".to_string())?;
@@ -52,9 +53,9 @@ impl Value {
         Ok(Value::reduce(num, den))
     }
 
-    fn mul(self, rhs: Value) -> Result<Value, String> {
-        let a = self.to_rational();
-        let b = rhs.to_rational();
+    pub fn mul(self, rhs: Value) -> Result<Value, String> {
+        let a = self.to_rational()?;
+        let b = rhs.to_rational()?;
         let num = a.0.checked_mul(b.0)
             .ok_or_else(|| "runtime error: integer overflow".to_string())?;
         let den = a.1.checked_mul(b.1)
@@ -62,19 +63,20 @@ impl Value {
         Ok(Value::reduce(num, den))
     }
 
-    fn div(self, rhs: Value) -> Result<Value, String> {
-        let a = self.to_rational();
-        let b = rhs.to_rational();
+    pub fn div(self, rhs: Value) -> Result<Value, String> {
+        let a = self.to_rational()?;
+        let b = rhs.to_rational()?;
         if b.0 == 0 {
             return Err("runtime error: division by zero".to_string());
         }
         Ok(Value::reduce(a.0 * b.1, a.1 * b.0))
     }
 
-    fn to_rational(&self) -> (i64, i64) {
+    fn to_rational(&self) -> Result<(i64, i64), String> {
         match self {
-            Value::Integer(n) => (*n, 1),
-            Value::Rational(n, d) => (*n, *d),
+            Value::Integer(n) => Ok((*n, 1)),
+            Value::Rational(n, d) => Ok((*n, *d)),
+            Value::Bool(_) => Err("runtime error: arithmetic on booleans".to_string()),
         }
     }
 
@@ -101,7 +103,12 @@ impl Value {
         match self {
             Value::Integer(n) => n.to_string(),
             Value::Rational(n, d) => format!("{}/{}", n, d),
+            Value::Bool(b) => b.to_string(),
         }
+    }
+
+    pub fn from_bool(b: bool) -> Value {
+        Value::Bool(b)
     }
 }
 
@@ -117,8 +124,9 @@ impl std::ops::Neg for Value {
     type Output = Value;
     fn neg(self) -> Value {
         match self {
-            Value::Integer(n) => Value::Integer(-n),
+            Value::Integer(n) => Value::Integer(n.checked_neg().unwrap_or(n)),
             Value::Rational(n, d) => Value::Rational(-n, d),
+            Value::Bool(_) => panic!("cannot negate boolean"),
         }
     }
 }

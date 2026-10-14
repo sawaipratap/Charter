@@ -108,7 +108,7 @@ interpreter code exists in the repository. What exists:
 
 ### Stage 0: Lexer, Parser, Evaluator for Arithmetic
 
-Built and tested (55/55 tests pass). What was added:
+Built and tested (59/59 tests pass). What was added:
 
 - **`src/lexer.rs`** — turns raw text into tokens: numbers, operators
   (`+`, `-`, `*`, `/`), and parentheses. Whitespace is ignored.
@@ -130,7 +130,7 @@ Built and tested (55/55 tests pass). What was added:
 Design decisions:
 - **Exact rationals**: chosen so Stage 4's probabilistic inference stays
   exact, not approximate. Uses `i64` for numerator and denominator;
-  overflow is a runtime error.
+  overflow is a runtime error (or lex error for literals > i64::MAX).
 - **Two-level precedence**: `parse_expr` handles `+`/`-`, `parse_term`
   handles `*`/`/`. Clean and extendable if we add more precedence levels.
 - **Rational reduction**: GCD to lowest terms, denominator always positive.

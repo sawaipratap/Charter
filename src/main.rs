@@ -1,10 +1,4 @@
 //! Charter CLI: run a Charter program from a file.
-//!
-//! Usage: charter run <file>
-//!
-//! Reads the file, lexes it, parses it, evaluates it, and prints the result.
-//! Errors are printed to stderr with a prefix like "lex error:", "parse error:",
-//! or "runtime error:".
 
 use std::env;
 use std::fs;
@@ -49,7 +43,7 @@ fn main() {
     };
 
     // Evaluate: AST -> value
-    let value = match charter::eval(ast) {
+    let value = match charter::eval_program(ast) {
         Ok(v) => v,
         Err(msg) => {
             eprintln!("{}", msg);

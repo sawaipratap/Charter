@@ -110,11 +110,9 @@ that reference exists to check it against.
 
 ## Status
 
-Stage 0: **complete** (55/55 tests pass). Lexer, parser, evaluator for plain
-arithmetic with exact rational division.
-
-Next: Stage 1 — variables, functions, recursion, `if`. Meredith is writing
-the tests.
+Stage 0: **complete** (59/59 tests pass). Lexer, parser, evaluator for plain
+arithmetic with exact rational division. Overflow (literal > i64::MAX or
+runtime arithmetic overflow) produces a proper error.
 
 ## Goals
 
