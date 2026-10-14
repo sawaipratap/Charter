@@ -139,7 +139,7 @@ Design decisions:
 
 ### Stage 1: Variables, Functions, Recursion, if/else
 
-Built and tested (83/83 tests pass). What was added:
+Built and tested (84/84 tests pass). What was added:
 
 - **`src/lexer.rs`** — Extended with keywords (`fn`, `let`, `if`, `else`,
   `true`, `false`), identifiers, multi-character operators (`&&`, `||`,
@@ -158,14 +158,13 @@ Design decisions:
 - **Functions as closures**: capture the environment at definition time.
 - **Static checks**: function existence, arity, chained comparisons detected
   at parse/check time; variable bindings checked statically with scope.
-- **Deep recursion support**: interpreter runs on a 256 MB stack thread with
-  a recursion limit of 10,000 to handle programs like sum(1000). Returns
-  "runtime error: recursion limit exceeded" instead of crashing for runaway
-  recursion.
+- **Recursion**: plain call depth tracked by incrementing a counter on
+  each function call; limit is 10,000. Programs that exceed it get a clean
+  `runtime error: recursion limit exceeded` instead of crashing.
 
 ### Stage 2: Effect declarations and checking
 
-Built and tested (45/45 tests pass). What was added:
+Built and tested (55/55 tests pass). What was added:
 
 - **Effect declarations**: `effect Name { op1(args), op2(), ... }` at any
   position in the program.

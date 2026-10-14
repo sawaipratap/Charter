@@ -116,14 +116,16 @@ runtime arithmetic overflow) produces a proper error.
 
 Stage 1: **complete** (84/84 tests pass). Variables, functions, recursion,
 if/else, booleans, comparisons, logical operators with lexical scope.
-Deep recursion supported via large stack thread with recursion limit check.
+Recursion is plain call depth with a limit of 10,000; programs that
+reach it get a clean `runtime error: recursion limit exceeded` instead
+of crashing.
 
 Stage 2: **complete** (55/55 tests pass). Effect declarations, uses clause,
 perform operations, and static effect checking before running.
 
-Stage 3: **in progress** (parser + static checks done, evaluator pending). 
+Stage 3: **in progress (parser and static checks only)**.
 Effect handlers with single-answer resumption via `handle { block } with { op(args) k => expr }`.
-Parser and static checks working (13/46 tests pass). Evaluator needs continuation-based dispatch.
+Parser and static checks working (13/46 tests pass). Evaluator pending.
 
 ## Goals
 
