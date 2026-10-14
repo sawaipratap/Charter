@@ -1,0 +1,14 @@
+[package]
+name = "charter"
+version = "0.0.1"
+edition = "2021"
+description = "Charter: a small programming language whose signatures declare effects, built in Rust."
+license = "MIT"
+
+[[bin]]
+name = "charter"
+path = "src/main.rs"
+
+[lib]
+name = "charter"
+path = "src/lib.rs"
