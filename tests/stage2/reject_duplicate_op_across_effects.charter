@@ -1,0 +1,3 @@
+effect A { go(x) }
+effect B { go(x) }
+1

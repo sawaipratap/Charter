@@ -1,0 +1,5 @@
+effect Ask { ask(prompt) }
+effect Log { say(msg) }
+fn a(n) uses [Ask] { if n == 0 { 0 } else { b(n - 1) } }
+fn b(n) uses [Ask] { perform ask(n) + a(n) }
+1

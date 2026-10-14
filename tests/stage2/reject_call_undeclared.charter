@@ -1,0 +1,5 @@
+effect Ask { ask(prompt) }
+effect Log { say(msg) }
+fn a() uses [Ask] { perform ask(0) }
+fn b() { a() }
+1

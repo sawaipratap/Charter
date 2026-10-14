@@ -1,0 +1,4 @@
+effect Ask { ask(prompt) }
+effect Log { say(msg) }
+fn f(c) uses [Ask] { if c { perform ask(1) } else { 0 } }
+4

@@ -1,0 +1,3 @@
+fn f() uses [Ask] { perform ask(1) }
+effect Ask { ask(p) }
+6

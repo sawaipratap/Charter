@@ -1,0 +1,4 @@
+effect Ask { ask(prompt) }
+effect Log { say(msg) }
+fn f() uses [Ask, Log] { let x = perform ask(1); perform say(x + perform ask(2)) }
+5

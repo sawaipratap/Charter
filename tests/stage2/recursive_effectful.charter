@@ -1,0 +1,4 @@
+effect Ask { ask(prompt) }
+effect Log { say(msg) }
+fn loop(n) uses [Log] { if n == 0 { 0 } else { perform say(n) + loop(n - 1) } }
+1

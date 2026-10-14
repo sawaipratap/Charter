@@ -1,0 +1,2 @@
+fn f() uses [Nope] { 1 }
+1

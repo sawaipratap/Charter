@@ -1,0 +1,3 @@
+effect Ask { ask(p) }
+effect Ask { other(p) }
+1

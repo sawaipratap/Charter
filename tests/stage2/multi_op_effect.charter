@@ -1,0 +1,3 @@
+effect Db { read(k), write(k, v) }
+fn f() uses [Db] { perform write(1, perform read(2)) }
+1

@@ -1,0 +1,4 @@
+effect Ask { ask(p) }
+// reviewer reads only this line
+fn f() uses [Ask] { perform ask(1) }
+3

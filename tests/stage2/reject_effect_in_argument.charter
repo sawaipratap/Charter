@@ -1,0 +1,5 @@
+effect Ask { ask(prompt) }
+effect Log { say(msg) }
+fn id(x) { x }
+fn f() { id(perform ask(1)) }
+1

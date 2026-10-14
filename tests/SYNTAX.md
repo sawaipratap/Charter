@@ -16,3 +16,10 @@ Test format, CLI and rejection kinds: see stage0/README.md. Kinds are `lex`, `pa
 - Comments: `//` to end of line.
 - Keywords (cannot be names): fn let if else true false uses effect perform handle with infer.
 - Recursion is tested to depth 1000.
+
+## Stage 2: effect declarations, checked before running
+- `effect Name { op1(a, b), op2(), ... }` at top level (before or after functions; at least one operation, commas between, no trailing comma). Effect names start with a capital letter by convention only. Operation names are global: unique across all effects.
+- `fn f(x) uses [Ask, Log] { ... }`: the effects the function may perform, directly or through anything it calls. `uses []` and omitting `uses` both mean pure. Listing more than needed is fine; listing a name twice or an undeclared effect is a `check` error.
+- `perform op(args)`: an expression; its operand is exactly the call (`perform ask(1) + 2` is `(perform ask(1)) + 2`). Wrong argument count or unknown operation is a `check` error.
+- Rule: the effects of a function body (its `perform`s plus the `uses` of every function it calls, at any depth) must be a subset of its `uses`; otherwise an `effect` error. The final top-level expression may use no effects: nothing handles them yet.
+- All checks happen before anything runs, so a rejected program prints nothing even if the bad code is never reached. Accepted programs in this stage never actually execute a `perform`.
