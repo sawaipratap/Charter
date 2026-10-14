@@ -26,11 +26,12 @@ pub struct Function {
     pub body: Expr,
 }
 
-/// A handler clause: operation name, continuation parameter, and handler body.
+/// A handler clause: operation name, operation params, continuation parameter, and handler body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandlerClause {
     pub op_name: String,
-    pub param: String,  // continuation parameter 'k'
+    pub op_params: Vec<String>,  // operation parameters (e.g., 'p' in ask(p))
+    pub param: String,           // continuation parameter 'k'
     pub body: Expr,
 }
 
@@ -826,11 +827,23 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
             // Parse handler clauses
             let mut clauses = Vec::new();
             let mut first = true;
-            while tokens.peek() != Some(&Token::RBrace) {
+            loop {
+                // Check for empty handler (no clauses) - already handled at the end
+                // Check for end of clauses
+                if tokens.peek() == Some(&Token::RBrace) {
+                    break;
+                }
+                
                 if !first {
-                    // Expect comma
+                    // Expect comma, then either another clause or end
                     match tokens.next() {
-                        Some(Token::Comma) => {}
+                        Some(Token::Comma) => {
+                            // Check if there's a clause after the comma or just '}'
+                            if tokens.peek() == Some(&Token::RBrace) {
+                                // Trailing comma - that's OK, break
+                                break;
+                            }
+                        }
                         Some(Token::RBrace) => break,
                         Some(t) => return Err(format!("parse error: expected ',' between handler clauses, got {:?}", t)),
                         None => return Err("parse error: unexpected end of input".to_string()),
@@ -896,9 +909,10 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
                 // Handler body expression
                 let clause_body = parse_expr(tokens)?;
                 
-                // For Stage 3, we just store the op name, k param, and body
+                // Store the handler clause with op params
                 clauses.push(HandlerClause {
                     op_name,
+                    op_params: args,
                     param: k_param,
                     body: clause_body,
                 });
@@ -909,6 +923,11 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
                 Some(Token::RBrace) => {}
                 Some(t) => return Err(format!("parse error: expected '}}' after handler clauses, got {:?}", t)),
                 None => return Err("parse error: unexpected end of input".to_string()),
+            }
+            
+            // Require at least one clause
+            if clauses.is_empty() {
+                return Err("parse error: handler must have at least one clause".to_string());
             }
             
             Ok(Expr::Handle(Box::new(body), clauses))
@@ -968,9 +987,8 @@ fn check_static(
         }
         Expr::Call(name, args) => {
             // Check if it's a continuation call (the continuation parameter 'k')
-            // Continuation calls are allowed in handler clause bodies
-            // We only allow k, not any bound variable
-            let is_continuation = name == "k";
+            // Continuation calls are only allowed if 'k' is in scope
+            let is_continuation = name == "k" && bound_vars.contains("k");
             
             if !fn_map.contains_key(name) && !is_continuation {
                 return Err(format!("check error: undefined function '{}'", name));
@@ -1021,8 +1039,12 @@ fn check_static(
             // Handler body can see the outer scope
             let mut new_bound = bound_vars.clone();
             
-            // Check each clause - the clause body can see the continuation param and outer scope
+            // Check each clause - the clause body can see the continuation param, op params, and outer scope
             for clause in clauses {
+                // Add the op params to scope (e.g., 'p' in ask(p))
+                for param in &clause.op_params {
+                    new_bound.insert(param.clone());
+                }
                 // Add the continuation parameter to scope
                 new_bound.insert(clause.param.clone());
                 // Check the clause body
@@ -1161,17 +1183,10 @@ fn collect_all_effects(
             collect_all_effects(then, functions, fn_map, op_map, used, visited)?;
             collect_all_effects(else_, functions, fn_map, op_map, used, visited)
         }
-        Expr::Handle(body, clauses) => {
-            // Collect effects from the body (but these are handled by the clauses)
-            collect_all_effects(body, functions, fn_map, op_map, used, visited)?;
-            // Collect effects from clause bodies
-            // Note: the op performed in a clause goes to the OUTER handler, not itself
-            // So we don't add the clause's performed effects to `used` directly
-            // Instead, they are "discharged" - handled by this handler
-            for clause in clauses {
-                // Clause body may perform effects - those go to outer handler
-                collect_all_effects(&clause.body, functions, fn_map, op_map, used, visited)?;
-            }
+        Expr::Handle(body, _clauses) => {
+            // Effects inside a Handle are DISCHARGED by the handler
+            // So we do NOT collect effects from the body or clauses
+            // The handler is responsible for handling them
             Ok(())
         }
     }

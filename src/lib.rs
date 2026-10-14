@@ -1,5 +1,7 @@
 //! Charter: a programming language where function signatures declare effects.
 
+use std::collections::HashMap;
+
 mod eval;
 mod lexer;
 mod parse;
@@ -9,12 +11,38 @@ pub use lexer::lex;
 pub use parse::{parse, parse_program, Program, Expr, BinOp, Function, Effect, Operation};
 pub use lexer::Token;
 
-/// A value in Charter: an integer, exact rational, or boolean.
+/// A continuation for effect handlers (Stage 3).
+/// Captures the rest of the computation after a perform.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Continuation {
+    /// The expression to evaluate after receiving the continuation's value
+    pub expr: Expr,
+    /// The environment at the point of perform
+    pub env: HashMap<String, Value>,
+    /// The functions registry
+    pub functions: HashMap<String, Function>,
+    /// The depth when the continuation was created
+    pub depth: usize,
+}
+
+impl std::fmt::Debug for Continuation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Continuation")
+            .field("expr", &"<expr>")
+            .field("env", &"<env>")
+            .field("functions", &"<functions>")
+            .field("depth", &self.depth)
+            .finish()
+    }
+}
+
+/// A value in Charter: an integer, exact rational, boolean, or continuation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Integer(i64),
     Rational(i64, i64), // numerator, denominator (denominator always > 0)
     Bool(bool),
+    Continuation(Box<Continuation>),
 }
 
 impl Value {
@@ -64,6 +92,7 @@ impl Value {
             Value::Integer(n) => Ok((*n, 1)),
             Value::Rational(n, d) => Ok((*n, *d)),
             Value::Bool(_) => Err("runtime error: arithmetic on booleans".to_string()),
+            Value::Continuation(_) => Err("runtime error: arithmetic on continuations".to_string()),
         }
     }
 
@@ -91,6 +120,7 @@ impl Value {
             Value::Integer(n) => n.to_string(),
             Value::Rational(n, d) => format!("{}/{}", n, d),
             Value::Bool(b) => b.to_string(),
+            Value::Continuation(_) => "<continuation>".to_string(),
         }
     }
 }
@@ -110,6 +140,7 @@ impl std::ops::Neg for Value {
             Value::Integer(n) => Value::Integer(n.checked_neg().unwrap_or(n)),
             Value::Rational(n, d) => Value::Rational(-n, d),
             Value::Bool(_) => panic!("cannot negate boolean"),
+            Value::Continuation(_) => panic!("cannot negate continuation"),
         }
     }
 }
