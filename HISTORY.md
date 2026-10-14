@@ -187,17 +187,18 @@ Design decisions:
 
 ### Stage 3: Effect handlers (in progress)
 
-Stack machine implementation with defunctionalized continuations:
+Stack machine implementation with defunctionalized continuations (commit 270ff83):
 - Added `enum Frame` for explicit stack: BinLeft, BinRight, Let, CallArgs,
   CallBody, If, Block, UnaryMinus, Not, HandleScope, PerformArgs, KCallArg
 - Continuation captures: frames above HandleScope, with pending expression for
   binary operations
 - k(value) resumes continuation: binds _it, evaluates pending expression
 - Short-circuit evaluation for && and ||
-- Fixed division operator bug (rhs.to_rational instead of self.to_rational twice)
-- Fixed block evaluation (bind last value before evaluating body)
-- Fixed function call environment (create call_env with params bound before
-  evaluating function body)
+
+Bugs fixed (commit 270ff83):
+- CallArgs next_idx was args.len() - 1 instead of args.len() (wrong arg evaluated)
+- Block binding: fixed binding order and remaining tracking
+- No-argument function calls handled correctly
 
 Static checks:
 - Handler clause arity must match operation arity
@@ -205,7 +206,7 @@ Static checks:
 - Unknown operations in handler rejected
 - k parameter scope enforcement
 
-Tests: 34/53 passing
+Test results: 36/53 passing
 
 Passing tests: resume_once, abort_without_resume, abort_skips_rest_of_block,
 no_perform_executed, trailing_comma_in_clauses, bool_through_handler,
