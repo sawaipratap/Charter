@@ -137,5 +137,32 @@ Design decisions:
 
 ## What's next
 
-Step 1: add variables, functions, recursion, and `if`. Meredith is writing
-the tests. Once they commit, I'll build the interpreter against them.
+### Stage 1: Variables, Functions, Recursion, if/else
+
+Built and tested (82/83 tests pass; 1 known limitation: deep recursion >~500
+causes stack overflow due to interpreter architecture). What was added:
+
+- **`src/lexer.rs`** — Extended with keywords (`fn`, `let`, `if`, `else`,
+  `true`, `false`), identifiers, multi-character operators (`&&`, `||`,
+  `==`, `!=`, `<=`, `>=`), and braces/semicolons for blocks.
+- **`src/parse.rs`** — Complete rewrite with function definitions, let
+  bindings, blocks, if/else expressions, and proper precedence climbing.
+  Static checks for function references, arity, chained comparisons.
+- **`src/eval.rs`** — Environment-based evaluation with lexical scope,
+  function closures, recursion support, short-circuit && and ||.
+- **`src/lib.rs`** — Extended `Value` with `Bool` variant, type-safe
+  arithmetic with error messages.
+
+Design decisions:
+- **Lexical scope**: variables are bound in their defining block; inner
+  blocks can shadow outer bindings.
+- **Functions as closures**: capture the environment at definition time.
+- **Static checks**: function existence, arity, chained comparisons detected
+  at parse/check time; variable bindings checked statically with scope.
+- **Tail recursion limitation**: interpreter uses native call stack, limiting
+  recursion depth to ~500. The native compiler (Stage 6) will address this.
+
+### Stage 2: Effect declarations (planned)
+
+Next: add effect declarations (`effect Name { op1, op2 }`), `uses` clause on
+functions, `perform op(args)`, and effect checking before running.

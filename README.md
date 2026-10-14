@@ -114,6 +114,10 @@ Stage 0: **complete** (59/59 tests pass). Lexer, parser, evaluator for plain
 arithmetic with exact rational division. Overflow (literal > i64::MAX or
 runtime arithmetic overflow) produces a proper error.
 
+Stage 1: **complete** (82/83 tests pass; 1 known limitation: deep recursion
+>~500 causes stack overflow). Variables, functions, recursion, if/else,
+booleans, comparisons, logical operators with lexical scope.
+
 ## Goals
 
 - Recreate, from first principles, a language purpose-built for a workflow
