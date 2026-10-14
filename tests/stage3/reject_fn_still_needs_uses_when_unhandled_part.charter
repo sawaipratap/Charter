@@ -1,0 +1,4 @@
+effect Ask { ask(prompt) }
+effect Log { log(msg) }
+fn f() uses [Ask] { handle { perform ask(1) + perform log(1) } with { ask(p) k => k(1) } }
+1

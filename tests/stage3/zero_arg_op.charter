@@ -1,0 +1,2 @@
+effect Tick { tick() }
+handle { perform tick() + perform tick() } with { tick() k => k(1) }

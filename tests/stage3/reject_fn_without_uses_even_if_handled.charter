@@ -1,0 +1,3 @@
+effect Ask { ask(prompt) }
+fn f() { perform ask(1) }
+handle { f() } with { ask(p) k => k(1) }

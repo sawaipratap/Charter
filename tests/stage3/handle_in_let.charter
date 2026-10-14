@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+{ let r = handle { perform ask(1) } with { ask(p) k => k(p + 41) }; r + 1 }

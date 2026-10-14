@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+handle { let x = perform ask(0); 1 / 0 } with { ask(p) k => 7 }

@@ -1,0 +1,3 @@
+effect Ask { ask(prompt) }
+effect Log { log(msg) }
+handle { handle { perform ask(1) + perform log(2) } with { ask(p) k => k(10) } } with { log(m) k => k(m * 100) }

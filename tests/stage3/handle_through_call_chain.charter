@@ -1,0 +1,4 @@
+effect Ask { ask(prompt) }
+fn a() uses [Ask] { perform ask(2) }
+fn b() uses [Ask] { a() + 1 }
+handle { b() } with { ask(p) k => k(p * 100) }

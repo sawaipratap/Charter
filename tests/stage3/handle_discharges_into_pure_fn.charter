@@ -1,0 +1,3 @@
+effect Ask { ask(prompt) }
+fn safe() { handle { perform ask(1) } with { ask(p) k => k(5) } }
+safe()

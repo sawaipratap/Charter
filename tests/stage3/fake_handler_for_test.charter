@@ -1,0 +1,3 @@
+effect Net { fetch(url) }
+fn get_weather(city) uses [Net] { perform fetch(city) }
+handle { get_weather(7) } with { fetch(c) k => k(c * 10) }

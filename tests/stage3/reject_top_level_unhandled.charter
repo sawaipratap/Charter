@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+perform ask(1)

@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+handle { perform ask(1) + perform ask(10) } with { ask(p) k => k(p * 2) }

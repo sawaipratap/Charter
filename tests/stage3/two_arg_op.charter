@@ -1,0 +1,2 @@
+effect Db { add(a, b) }
+handle { perform add(3, 4) } with { add(a, b) k => k(a * b) }

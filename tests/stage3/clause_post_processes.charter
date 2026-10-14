@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+handle { perform ask(5) } with { ask(p) k => k(p) + 1000 }

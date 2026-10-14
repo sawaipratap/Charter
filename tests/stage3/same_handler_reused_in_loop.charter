@@ -1,0 +1,3 @@
+effect Ask { ask(prompt) }
+fn count(n) uses [Ask] { if n == 0 { 0 } else { perform ask(n) + count(n - 1) } }
+handle { count(4) } with { ask(p) k => k(p) }

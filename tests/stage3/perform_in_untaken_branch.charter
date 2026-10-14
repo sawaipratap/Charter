@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+handle { if false { perform ask(1) } else { 3 } } with { ask(p) k => 0 }

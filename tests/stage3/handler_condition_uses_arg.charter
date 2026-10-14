@@ -1,0 +1,2 @@
+effect Ask { ask(prompt) }
+handle { perform ask(5) } with { ask(p) k => if p > 3 { k(1) } else { k(2) } }

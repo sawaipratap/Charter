@@ -23,3 +23,12 @@ Test format, CLI and rejection kinds: see stage0/README.md. Kinds are `lex`, `pa
 - `perform op(args)`: an expression; its operand is exactly the call (`perform ask(1) + 2` is `(perform ask(1)) + 2`). Wrong argument count or unknown operation is a `check` error.
 - Rule: the effects of a function body (its `perform`s plus the `uses` of every function it calls, at any depth) must be a subset of its `uses`; otherwise an `effect` error. The final top-level expression may use no effects: nothing handles them yet.
 - All checks happen before anything runs, so a rejected program prints nothing even if the bad code is never reached. Accepted programs in this stage never actually execute a `perform`.
+
+## Stage 3: single-answer handlers
+- `handle { block } with { op(a, b) k => expr, op2() k => expr }`: runs the block; when it performs `op(v1, v2)`, the matching clause runs with `a`, `b` bound to the values and `k` bound to the paused rest of the block. Clauses are comma separated (trailing comma allowed, at least one clause). The clause body is any expression (use a block for several statements).
+- `k(v)` resumes the paused code with `v` as the answer of the `perform`, and evaluates to the final value of the handled block. A clause may call `k` zero times (abort: the clause value becomes the value of the whole `handle`) or once; code may use the value of `k(v)` further (`k(p) + 1000`). `k` is only visible inside its clause; `k` takes exactly one argument.
+- The value of the `handle` expression is the value of the block if it never performs a handled op, otherwise whatever the clause produced.
+- Handlers are deep: the same handler stays installed when the code resumes, so later performs of the same op in the block are handled too.
+- A perform of an op the nearest handler does not handle passes to the next enclosing handler. The innermost handler for an op wins.
+- A clause runs outside its own handler: a `perform` inside a clause goes to the enclosing handlers, not to itself.
+- Effect checking: a `handle` removes the effects of the ops it has clauses for from what its block needs. What is left (including whatever the clauses themselves perform) must still be declared by the enclosing function, or be empty at top level. A clause op that does not exist, or has a different parameter count, is a `check` error; two clauses for one op is a `check` error. A handle only covers code in its own block: a function that performs without declaring it is still an `effect` error even if every call to it is inside a handle.
