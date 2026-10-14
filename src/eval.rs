@@ -120,9 +120,8 @@ fn eval_expr(
                 call_env.insert(param.clone(), value);
             }
             
-            // Evaluate function body - functions don't inherit handlers
-            // (handlers are lexically scoped)
-            eval_expr(&func.body, &call_env, functions, depth + 1, None)
+            // Evaluate function body - inherit the handler for lexical scoping
+            eval_expr(&func.body, &call_env, functions, depth + 1, handler)
         }
         
         Expr::Perform(op_name, args) => {
