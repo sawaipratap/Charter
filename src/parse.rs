@@ -72,6 +72,9 @@ pub enum Expr {
     
     // Handle expression (Stage 3)
     Handle(Box<Expr>, Vec<HandlerClause>),  // body, handler clauses
+    
+    // Infer expression (Stage 4): exact inference under Prob effect
+    Infer(Box<Expr>),  // body expression
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -116,6 +119,21 @@ pub fn parse_program(tokens: Vec<Token>) -> Result<Program, String> {
     let mut functions = Vec::new();
     let mut seen_fn_names: HashMap<String, ()> = HashMap::new();
     let mut main_expr = None;
+    
+    // Add built-in Prob effect (Stage 4)
+    let prob_effect = Effect {
+        name: "Prob".to_string(),
+        ops: vec![
+            Operation { name: "flip".to_string(), arity: 1 },
+            Operation { name: "choose".to_string(), arity: 1 },  // variadic, arity 1 means at least 1
+            Operation { name: "observe".to_string(), arity: 1 },
+        ],
+    };
+    effects.push(prob_effect);
+    seen_effects.insert("Prob".to_string(), ());
+    seen_ops.insert("flip".to_string());
+    seen_ops.insert("choose".to_string());
+    seen_ops.insert("observe".to_string());
     
     loop {
         match tokens.peek() {
@@ -204,6 +222,12 @@ fn parse_effect(
     if seen_effects.contains_key(&name) {
         return Err(format!("check error: duplicate effect name '{}'", name));
     }
+    
+    // Prob is a built-in effect (Stage 4)
+    if name == "Prob" {
+        return Err("check error: cannot redefine built-in effect 'Prob'".to_string());
+    }
+    
     seen_effects.insert(name.clone(), ());
     
     // {
@@ -934,6 +958,11 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
             
             Ok(Expr::Handle(Box::new(body), clauses))
         }
+        Some(Token::Infer) => {
+            // infer { expr }
+            let body = parse_block(tokens)?;
+            Ok(Expr::Infer(Box::new(body)))
+        }
         Some(t) => Err(format!("parse error: unexpected token: {:?}", t)),
         None => Err("parse error: unexpected end of input".to_string()),
     }
@@ -1075,6 +1104,10 @@ fn check_static(
             }
             
             // Check the handler body
+            check_static(body, functions, fn_map, effect_map, op_map, bound_vars)
+        }
+        Expr::Infer(body) => {
+            // Check the body - Prob effect is allowed
             check_static(body, functions, fn_map, effect_map, op_map, bound_vars)
         }
     }
@@ -1264,6 +1297,11 @@ fn collect_all_effects(
             // Recursively collect effects from body, filtering out handled effects
             collect_all_effects_filtered(body, functions, fn_map, op_map, used, visited, &handled_effects)
         }
+        Expr::Infer(_body) => {
+            // Effects inside infer are handled by the infer mechanism
+            // No need to check them against uses
+            Ok(())
+        }
     }
 }
 
@@ -1327,6 +1365,10 @@ fn collect_all_effects_filtered(
                 .cloned()
                 .collect();
             collect_all_effects_filtered(body, functions, fn_map, op_map, used, visited, &combined)
+        }
+        Expr::Infer(_body) => {
+            // Effects inside infer are handled by the infer mechanism
+            Ok(())
         }
     }
 }

@@ -23,6 +23,7 @@ pub enum Token {
     Perform,
     Handle,
     With,
+    Infer,
     
     // Operators
     Arrow,  // =>
@@ -83,6 +84,7 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
                     "perform" => Token::Perform,
                     "handle" => Token::Handle,
                     "with" => Token::With,
+                    "infer" => Token::Infer,
                     _ => Token::Ident(ident),
                 };
                 tokens.push(token);

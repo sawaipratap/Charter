@@ -59,6 +59,7 @@ impl Value {
             Value::Rational(n, d) => Ok((*n, *d)),
             Value::Bool(_) => Err("runtime error: arithmetic on booleans".to_string()),
             Value::Continuation(_) => Err("runtime error: arithmetic on continuations".to_string()),
+            Value::Distribution(_) => Err("runtime error: arithmetic on distributions".to_string()),
         }
     }
 
@@ -87,6 +88,18 @@ impl Value {
             Value::Rational(n, d) => format!("{}/{}", n, d),
             Value::Bool(b) => b.to_string(),
             Value::Continuation(_) => "<continuation>".to_string(),
+            Value::Distribution(d) => {
+                let mut lines: Vec<String> = Vec::new();
+                for (value, (num, den)) in d {
+                    let prob_str = if *den == 1 {
+                        num.to_string()
+                    } else {
+                        format!("{}/{}", num, den)
+                    };
+                    lines.push(format!("{}: {}", value.display(), prob_str));
+                }
+                lines.join("\n")
+            }
         }
     }
 }
@@ -107,6 +120,7 @@ impl std::ops::Neg for Value {
             Value::Rational(n, d) => Value::Rational(-n, d),
             Value::Bool(_) => panic!("cannot negate boolean"),
             Value::Continuation(_) => panic!("cannot negate continuation"),
+            Value::Distribution(_) => panic!("cannot negate distribution"),
         }
     }
 }
