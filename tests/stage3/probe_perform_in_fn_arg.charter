@@ -1,0 +1,3 @@
+effect C { toss() }
+fn id(x) { x }
+handle { id(perform toss()) } with { toss() k => k(10) }

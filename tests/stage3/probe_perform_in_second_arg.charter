@@ -1,0 +1,3 @@
+effect C { toss() }
+fn sub(a, b) { a - b }
+handle { sub(100, perform toss()) } with { toss() k => k(1) }

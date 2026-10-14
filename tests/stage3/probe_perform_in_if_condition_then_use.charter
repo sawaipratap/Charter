@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { if perform toss() > 5 { 100 } else { 200 } } with { toss() k => k(1) }
