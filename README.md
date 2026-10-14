@@ -124,6 +124,7 @@ Stage 2: **complete** (55/55 tests pass). Effect declarations, uses clause,
 perform operations, and static effect checking before running.
 
 Stage 3: **complete (56/56 tests passing)**.
+Stage 4: **in progress (38/59 tests passing)**. Prob effect (flip, choose, observe), infer expression.
 Stack machine evaluator with defunctionalized continuations. Stages 0-2 green (198/198).
 Handler clause arity checking, effect checking for clauses, k arity check.
 

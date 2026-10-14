@@ -203,3 +203,13 @@ Static checks:
 - Clause body effects checked against enclosing context
 
 Test results: 56/56 passing (commit 4b26419)
+
+### Stage 4: multi-answer handlers, exact inference (in progress)
+
+Implemented:
+- Built-in Prob effect (flip, choose, observe)
+- infer { expr } for exact inference
+- Custom inference evaluator that explores all branches
+- Distribution values with pooling and normalization
+
+Test results: 38/59 passing (commit 54532ca)
