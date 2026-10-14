@@ -6,7 +6,7 @@ use crate::lexer;
 use crate::parse;
 use std::collections::HashMap;
 
-const RECURSION_LIMIT: usize = 100_000;
+const RECURSION_LIMIT: usize = 10_000;
 
 /// A function value with its closure (captured environment).
 #[derive(Debug, Clone)]

@@ -114,12 +114,16 @@ Stage 0: **complete** (59/59 tests pass). Lexer, parser, evaluator for plain
 arithmetic with exact rational division. Overflow (literal > i64::MAX or
 runtime arithmetic overflow) produces a proper error.
 
-Stage 1: **complete** (83/83 tests pass). Variables, functions, recursion,
+Stage 1: **complete** (84/84 tests pass). Variables, functions, recursion,
 if/else, booleans, comparisons, logical operators with lexical scope.
-Deep recursion supported via large stack thread.
+Deep recursion supported via large stack thread with recursion limit check.
 
-Stage 2: **complete** (45/45 tests pass). Effect declarations, uses clause,
+Stage 2: **complete** (55/55 tests pass). Effect declarations, uses clause,
 perform operations, and static effect checking before running.
+
+Stage 3: **in progress** (parser done, evaluator pending). Effect handlers
+with single-answer resumption via `handle { block } with { op k => expr }`.
+Tests require full handler implementation.
 
 ## Goals
 

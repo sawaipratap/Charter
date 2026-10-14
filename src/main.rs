@@ -6,7 +6,7 @@ use std::process;
 use std::thread;
 
 const STACK_SIZE: usize = 256 * 1024 * 1024; // 256 MB
-const RECURSION_LIMIT: usize = 100_000; // Allow deep recursion
+const RECURSION_LIMIT: usize = 10_000; // Allow deep recursion
 
 fn main() {
     let args: Vec<String> = env::args().collect();

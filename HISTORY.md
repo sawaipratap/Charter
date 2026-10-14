@@ -159,7 +159,7 @@ Design decisions:
 - **Static checks**: function existence, arity, chained comparisons detected
   at parse/check time; variable bindings checked statically with scope.
 - **Deep recursion support**: interpreter runs on a 256 MB stack thread with
-  a recursion limit of 100,000 to handle programs like sum(1000). Returns
+  a recursion limit of 10,000 to handle programs like sum(1000). Returns
   "runtime error: recursion limit exceeded" instead of crashing for runaway
   recursion.
 
@@ -186,7 +186,8 @@ Design decisions:
 - **Declarations can be interleaved**: effects, functions, and the main
   expression can appear in any order.
 
-### Stage 3: Effect handlers (planned)
+### Stage 3: Effect handlers (in progress)
 
-Next: add `handle { block } with { op k => expr, ... }` for actual
-effect handling with single-answer resumption.
+Parser support added for `handle { block } with { op k => expr, ... }` syntax.
+Evaluator changes pending - need to implement continuation-based handler dispatch.
+Tests: 5/46 passing (basic parsing), remaining tests require full handler implementation.
