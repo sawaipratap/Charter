@@ -22,34 +22,44 @@ impl Value {
     /// Evaluate a binary operation on two values.
     pub fn apply_op(self, op: char, rhs: Value) -> Result<Value, String> {
         match op {
-            '+' => Ok(self.add(rhs)),
-            '-' => Ok(self.sub(rhs)),
-            '*' => Ok(self.mul(rhs)),
+            '+' => self.add(rhs),
+            '-' => self.sub(rhs),
+            '*' => self.mul(rhs),
             '/' => self.div(rhs),
             _ => Err(format!("unknown operator '{}'", op)),
         }
     }
 
-    fn add(self, rhs: Value) -> Value {
+    fn add(self, rhs: Value) -> Result<Value, String> {
         let a = self.to_rational();
         let b = rhs.to_rational();
-        let num = a.0 * a.1 + b.0 * b.1;
-        let den = a.1 * b.1;
-        Value::reduce(num, den)
+        let num = a.0.checked_mul(a.1)
+            .and_then(|a_num| b.0.checked_mul(b.1).and_then(|b_num| a_num.checked_add(b_num)))
+            .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+        let den = a.1.checked_mul(b.1)
+            .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+        Ok(Value::reduce(num, den))
     }
 
-    fn sub(self, rhs: Value) -> Value {
+    fn sub(self, rhs: Value) -> Result<Value, String> {
         let a = self.to_rational();
         let b = rhs.to_rational();
-        let num = a.0 * a.1 - b.0 * b.1;
-        let den = a.1 * b.1;
-        Value::reduce(num, den)
+        let num = a.0.checked_mul(a.1)
+            .and_then(|a_num| b.0.checked_mul(b.1).and_then(|b_num| a_num.checked_sub(b_num)))
+            .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+        let den = a.1.checked_mul(b.1)
+            .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+        Ok(Value::reduce(num, den))
     }
 
-    fn mul(self, rhs: Value) -> Value {
+    fn mul(self, rhs: Value) -> Result<Value, String> {
         let a = self.to_rational();
         let b = rhs.to_rational();
-        Value::reduce(a.0 * b.0, a.1 * b.1)
+        let num = a.0.checked_mul(b.0)
+            .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+        let den = a.1.checked_mul(b.1)
+            .ok_or_else(|| "runtime error: integer overflow".to_string())?;
+        Ok(Value::reduce(num, den))
     }
 
     fn div(self, rhs: Value) -> Result<Value, String> {

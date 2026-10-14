@@ -26,7 +26,7 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
     while let Some(&c) = chars.peek() {
         match c {
             '0'..='9' => {
-                let n = read_number(&mut chars);
+                let n = read_number(&mut chars)?;
                 tokens.push(Token::Number(n));
             }
             '+' => { tokens.push(Token::Plus); chars.next(); }
@@ -44,17 +44,19 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
 }
 
 /// Read one multi-digit number from the character iterator.
-fn read_number(chars: &mut Peekable<Chars>) -> i64 {
+fn read_number(chars: &mut Peekable<Chars>) -> Result<i64, String> {
     let mut n = 0i64;
     while let Some(&c) = chars.peek() {
         if let Some(d) = c.to_digit(10) {
-            n = n * 10 + d as i64;
+            // Check for overflow before multiplying
+            n = n.checked_mul(10).and_then(|n| n.checked_add(d as i64))
+                .ok_or_else(|| "lex error: integer literal too big".to_string())?;
             chars.next();
         } else {
             break;
         }
     }
-    n
+    Ok(n)
 }
 
 #[cfg(test)]
