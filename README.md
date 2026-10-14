@@ -118,6 +118,9 @@ Stage 1: **complete** (82/83 tests pass; 1 known limitation: deep recursion
 >~500 causes stack overflow). Variables, functions, recursion, if/else,
 booleans, comparisons, logical operators with lexical scope.
 
+Stage 2: **complete** (45/45 tests pass). Effect declarations, uses clause,
+perform operations, and static effect checking before running.
+
 ## Goals
 
 - Recreate, from first principles, a language purpose-built for a workflow

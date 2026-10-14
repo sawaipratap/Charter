@@ -162,7 +162,30 @@ Design decisions:
 - **Tail recursion limitation**: interpreter uses native call stack, limiting
   recursion depth to ~500. The native compiler (Stage 6) will address this.
 
-### Stage 2: Effect declarations (planned)
+### Stage 2: Effect declarations and checking
 
-Next: add effect declarations (`effect Name { op1, op2 }`), `uses` clause on
-functions, `perform op(args)`, and effect checking before running.
+Built and tested (45/45 tests pass). What was added:
+
+- **Effect declarations**: `effect Name { op1(args), op2(), ... }` at any
+  position in the program.
+- **Uses clause**: `fn f() uses [Effect1, Effect2] { ... }` declares
+  which effects a function may perform.
+- **Perform**: `perform op(args)` expression marks effect usage.
+- **Effect checking**: All effects used (direct performs + transitive
+  through function calls) must be declared in the function's uses.
+  Top-level expression cannot use effects (nothing handles them yet).
+- **Arity checking**: Both function calls and perform operations check
+  argument count at static-check time.
+
+Design decisions:
+- **Effect ops are global**: operation names must be unique across all
+  effects.
+- **Uses is a subset check**: a function's used effects (direct performs
+  + transitive) must be a subset of its declared uses.
+- **Declarations can be interleaved**: effects, functions, and the main
+  expression can appear in any order.
+
+### Stage 3: Effect handlers (planned)
+
+Next: add `handle { block } with { op k => expr, ... }` for actual
+effect handling with single-answer resumption.
