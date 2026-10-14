@@ -3,22 +3,38 @@
 use crate::lexer::Token;
 use std::collections::{HashMap, HashSet};
 
+/// An operation within an effect.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Operation {
+    pub name: String,
+    pub arity: usize,
+}
+
+/// An effect declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Effect {
+    pub name: String,
+    pub ops: Vec<Operation>,
+}
+
 /// A function definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub name: String,
     pub params: Vec<String>,
+    pub uses: Vec<String>,  // effects declared in uses clause
     pub body: Expr,
 }
 
-/// A complete program: function definitions followed by a main expression.
+/// A complete program: effect declarations, function definitions, and a main expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub effects: Vec<Effect>,
     pub functions: Vec<Function>,
     pub main: Expr,
 }
 
-/// An expression in Charter's Stage 1.
+/// An expression in Charter's Stage 2.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     // Literals
@@ -32,6 +48,9 @@ pub enum Expr {
     // Function call
     Call(String, Vec<Expr>),
     
+    // Perform an operation (Stage 2)
+    Perform(String, Vec<Expr>),  // op name, args
+    
     // Binary operations
     Binary(Box<Expr>, BinOp, Box<Expr>),
     
@@ -43,7 +62,7 @@ pub enum Expr {
     If(Box<Expr>, Box<Expr>, Box<Expr>), // condition, then, else
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BinOp {
     // Arithmetic
     Add, Sub, Mul, Div,
@@ -64,24 +83,6 @@ impl BinOp {
         }
     }
     
-    pub fn from_token(token: &Token) -> Option<Self> {
-        match token {
-            Token::Plus => Some(BinOp::Add),
-            Token::Minus => Some(BinOp::Sub),
-            Token::Star => Some(BinOp::Mul),
-            Token::Slash => Some(BinOp::Div),
-            Token::Less => Some(BinOp::Less),
-            Token::LessEqual => Some(BinOp::LessEqual),
-            Token::Greater => Some(BinOp::Greater),
-            Token::GreaterEqual => Some(BinOp::GreaterEqual),
-            Token::Equal => Some(BinOp::Equal),
-            Token::NotEqual => Some(BinOp::NotEqual),
-            Token::And => Some(BinOp::And),
-            Token::Or => Some(BinOp::Or),
-            _ => None,
-        }
-    }
-    
     pub fn is_comparison(&self) -> bool {
         matches!(self, BinOp::Less | BinOp::LessEqual | BinOp::Greater | 
                       BinOp::GreaterEqual | BinOp::Equal | BinOp::NotEqual)
@@ -96,13 +97,20 @@ pub fn parse(tokens: Vec<Token>) -> Result<Program, String> {
 pub fn parse_program(tokens: Vec<Token>) -> Result<Program, String> {
     let mut tokens = tokens.into_iter().peekable();
     
-    // Parse functions and main expression in any order
+    // Collections for effects, functions, and main expression
+    let mut effects = Vec::new();
+    let mut seen_effects: HashMap<String, ()> = HashMap::new();
+    let mut seen_ops: HashSet<String> = HashSet::new();
     let mut functions = Vec::new();
     let mut seen_fn_names: HashMap<String, ()> = HashMap::new();
     let mut main_expr = None;
     
     loop {
         match tokens.peek() {
+            Some(Token::Effect) => {
+                let effect = parse_effect(&mut tokens, &mut seen_effects, &mut seen_ops)?;
+                effects.push(effect);
+            }
             Some(Token::Fn) => {
                 let func = parse_fn(&mut tokens, &mut seen_fn_names)?;
                 functions.push(func);
@@ -112,18 +120,11 @@ pub fn parse_program(tokens: Vec<Token>) -> Result<Program, String> {
                 break;
             }
             Some(_) => {
-                // Main expression
+                // Main expression (only once)
                 if main_expr.is_some() {
                     return Err("parse error: multiple expressions at top level".to_string());
                 }
                 main_expr = Some(parse_expr(&mut tokens)?);
-                if tokens.peek() != Some(&Token::Eof) {
-                    // Could be a function after the expression
-                    if tokens.peek() == Some(&Token::Fn) {
-                        continue;
-                    }
-                    return Err("parse error: unexpected tokens after expression".to_string());
-                }
             }
             None => break,
         }
@@ -131,83 +132,173 @@ pub fn parse_program(tokens: Vec<Token>) -> Result<Program, String> {
     
     let main = main_expr.ok_or_else(|| "parse error: no expression found".to_string())?;
     
-    // Static checks: build function map and check references
+    // Build maps for static checks
+    let effect_map: HashMap<String, usize> = effects.iter()
+        .enumerate()
+        .map(|(i, e)| (e.name.clone(), i))
+        .collect();
+    
+    let op_map: HashMap<String, (String, usize)> = effects.iter()
+        .flat_map(|e| e.ops.iter().map(|op| (op.name.clone(), (e.name.clone(), op.arity))))
+        .collect();
+    
     let fn_map: HashMap<String, usize> = functions.iter()
         .enumerate()
         .map(|(i, f)| (f.name.clone(), i))
         .collect();
     
-    check_static(&main, &fn_map)?;
+    // Static checks
+    check_static(&main, &functions, &fn_map, &effect_map, &op_map, &HashSet::new())?;
     for func in &functions {
         // Function parameters are bound in the function body
         let mut param_set: HashSet<String> = HashSet::new();
         for param in &func.params {
             param_set.insert(param.clone());
         }
-        check_static_with_scope(&func.body, &fn_map, &param_set)?;
+        check_static(&func.body, &functions, &fn_map, &effect_map, &op_map, &param_set)?;
     }
     
-    Ok(Program { functions, main })
+    // Effect checking - main expression should use no effects
+    check_effects(&main, &functions, &fn_map, &effect_map, &op_map, &HashSet::new())?;
+    for func in &functions {
+        check_effects_fn(func, &functions, &fn_map, &effect_map, &op_map)?;
+    }
+    
+    Ok(Program { effects, functions, main })
 }
 
-/// Static checks: function references and variable scope
-fn check_static(expr: &Expr, fn_map: &HashMap<String, usize>) -> Result<HashSet<String>, String> {
-    check_static_with_scope(expr, fn_map, &HashSet::new())
+/// Parse an effect declaration: effect Name { op1(a, b), op2(), ... }
+fn parse_effect(
+    tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>, 
+    seen_effects: &mut HashMap<String, ()>,
+    seen_ops: &mut HashSet<String>,
+) -> Result<Effect, String> {
+    // Consume 'effect'
+    match tokens.next() {
+        Some(Token::Effect) => {}
+        Some(t) => return Err(format!("parse error: expected 'effect', got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    // Effect name
+    let name = match tokens.next() {
+        Some(Token::Ident(s)) => s,
+        Some(t) => return Err(format!("parse error: expected effect name, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    };
+    
+    if seen_effects.contains_key(&name) {
+        return Err(format!("check error: duplicate effect name '{}'", name));
+    }
+    seen_effects.insert(name.clone(), ());
+    
+    // {
+    match tokens.next() {
+        Some(Token::LBrace) => {}
+        Some(t) => return Err(format!("parse error: expected '{{' after effect name, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    // Parse operations
+    let mut ops = Vec::new();
+    let mut first = true;
+    
+    while tokens.peek() != Some(&Token::RBrace) {
+        if !first {
+            // Expect comma
+            match tokens.next() {
+                Some(Token::Comma) => {}
+                Some(Token::RBrace) => break,  // allow trailing comma
+                Some(t) => return Err(format!("parse error: expected ',' between operations, got {:?}", t)),
+                None => return Err("parse error: unexpected end of input".to_string()),
+            }
+        }
+        first = false;
+        
+        // Operation name
+        let op_name = match tokens.next() {
+            Some(Token::Ident(s)) => s,
+            Some(t) => return Err(format!("parse error: expected operation name, got {:?}", t)),
+            None => return Err("parse error: unexpected end of input".to_string()),
+        };
+        
+        if seen_ops.contains(&op_name) {
+            return Err(format!("check error: duplicate operation name '{}'", op_name));
+        }
+        seen_ops.insert(op_name.clone());
+        
+        // (args)
+        let arity = parse_param_list_opt(tokens)?;
+        
+        ops.push(Operation { name: op_name, arity });
+    }
+    
+    // }
+    match tokens.next() {
+        Some(Token::RBrace) => {}
+        Some(t) => return Err(format!("parse error: expected '}}' after effect operations, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    if ops.is_empty() {
+        return Err("parse error: effect must have at least one operation".to_string());
+    }
+    
+    Ok(Effect { name, ops })
 }
 
-fn check_static_with_scope(
-    expr: &Expr, 
-    fn_map: &HashMap<String, usize>,
-    bound_vars: &HashSet<String>
-) -> Result<HashSet<String>, String> {
-    match expr {
-        Expr::Number(_) | Expr::Boolean(_) => Ok(bound_vars.clone()),
-        Expr::Ident(name) => {
-            // Check if variable is bound
-            if !bound_vars.contains(name) {
-                return Err(format!("check error: unbound variable '{}'", name));
-            }
-            Ok(bound_vars.clone())
+/// Parse optional (a, b, c) parameter list, returning arity
+fn parse_param_list_opt(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> Result<usize, String> {
+    if tokens.peek() != Some(&Token::LParen) {
+        return Ok(0);  // no params
+    }
+    tokens.next();  // consume (
+    
+    // Check for empty params
+    if tokens.peek() == Some(&Token::RParen) {
+        tokens.next();
+        return Ok(0);
+    }
+    
+    let mut arity = 0;
+    
+    // Parse first parameter
+    match tokens.next() {
+        Some(Token::Ident(_)) => { arity = 1; }
+        Some(Token::RParen) => return Ok(0),
+        Some(t) => return Err(format!("parse error: expected parameter name, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    // Parse remaining parameters
+    while tokens.peek() != Some(&Token::RParen) {
+        // Expect comma
+        match tokens.next() {
+            Some(Token::Comma) => {}
+            Some(t) => return Err(format!("parse error: expected ',' in params, got {:?}", t)),
+            None => return Err("parse error: unexpected end of input".to_string()),
         }
-        Expr::Block(bindings, body) => {
-            let mut new_bound = bound_vars.clone();
-            for (name, e) in bindings {
-                // The right side of let binding can see current bindings
-                check_static_with_scope(e, fn_map, &new_bound)?;
-                // Shadowing is allowed - just add the new binding
-                new_bound.insert(name.clone());
-            }
-            // Body can see all bindings
-            check_static_with_scope(body, fn_map, &new_bound)
-        }
-        Expr::Call(name, args) => {
-            // Check function exists
-            if !fn_map.contains_key(name) {
-                return Err(format!("check error: undefined function '{}'", name));
-            }
-            // Check arguments (arity checked at runtime with function def)
-            let mut new_bound = bound_vars.clone();
-            for arg in args {
-                new_bound = check_static_with_scope(arg, fn_map, &new_bound)?;
-            }
-            Ok(new_bound)
-        }
-        Expr::Binary(left, _, right) => {
-            let new_bound = check_static_with_scope(left, fn_map, bound_vars)?;
-            check_static_with_scope(right, fn_map, &new_bound)
-        }
-        Expr::UnaryMinus(inner) | Expr::Not(inner) => {
-            check_static_with_scope(inner, fn_map, bound_vars)
-        }
-        Expr::If(cond, then, else_) => {
-            let new_bound = check_static_with_scope(cond, fn_map, bound_vars)?;
-            let new_bound = check_static_with_scope(then, fn_map, &new_bound)?;
-            check_static_with_scope(else_, fn_map, &new_bound)
+        
+        // Expect parameter name
+        match tokens.next() {
+            Some(Token::Ident(_)) => { arity += 1; }
+            Some(Token::RParen) => return Err("parse error: trailing comma in params".to_string()),
+            Some(t) => return Err(format!("parse error: expected parameter name, got {:?}", t)),
+            None => return Err("parse error: unexpected end of input".to_string()),
         }
     }
+    
+    // Consume )
+    match tokens.next() {
+        Some(Token::RParen) => {}
+        Some(t) => return Err(format!("parse error: expected ')' after params, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    Ok(arity)
 }
 
-/// Parse a function definition: fn name(params) { body }
+/// Parse a function definition: fn name(params) uses [effects] { body }
 fn parse_fn(
     tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>, 
     seen_names: &mut HashMap<String, ()>
@@ -288,10 +379,62 @@ fn parse_fn(
         None => return Err("parse error: unexpected end of input".to_string()),
     }
     
+    // Optional uses clause
+    let mut uses = Vec::new();
+    if tokens.peek() == Some(&Token::Uses) {
+        tokens.next();  // consume 'uses'
+        uses = parse_effect_list(tokens)?;
+    }
+    
     // Function body (a block)
     let body = parse_block(tokens)?;
     
-    Ok(Function { name, params, body })
+    Ok(Function { name, params, uses, body })
+}
+
+/// Parse [Effect1, Effect2, ...]
+fn parse_effect_list(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> Result<Vec<String>, String> {
+    // [
+    match tokens.next() {
+        Some(Token::LBracket) => {}
+        Some(t) => return Err(format!("parse error: expected '[' after 'uses', got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    let mut effects = Vec::new();
+    let mut first = true;
+    
+    while tokens.peek() != Some(&Token::RBracket) {
+        if !first {
+            match tokens.next() {
+                Some(Token::Comma) => {}
+                Some(Token::RBracket) => break,
+                Some(t) => return Err(format!("parse error: expected ',' in uses list, got {:?}", t)),
+                None => return Err("parse error: unexpected end of input".to_string()),
+            }
+        }
+        first = false;
+        
+        let name = match tokens.next() {
+            Some(Token::Ident(s)) => s,
+            Some(Token::RBracket) => break,
+            Some(t) => return Err(format!("parse error: expected effect name, got {:?}", t)),
+            None => return Err("parse error: unexpected end of input".to_string()),
+        };
+        effects.push(name);
+        
+        if tokens.peek() == Some(&Token::RBracket) {
+            break;
+        }
+    }
+    
+    match tokens.next() {
+        Some(Token::RBracket) => {}
+        Some(t) => return Err(format!("parse error: expected ']' after uses list, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    Ok(effects)
 }
 
 /// Parse a block: { let x = expr; let y = expr; final_expr }
@@ -358,15 +501,6 @@ fn parse_let(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> R
 }
 
 /// Parse an expression with precedence climbing.
-/// Precedence (lowest to highest):
-///   or
-///   and
-///   equality (==, !=)
-///   comparison (<, <=, >, >=)
-///   addition, subtraction
-///   multiplication, division
-///   unary (-, !)
-///   primary (number, identifier, call, block, if)
 fn parse_expr(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> Result<Expr, String> {
     parse_or(tokens)
 }
@@ -403,7 +537,6 @@ fn parse_equality(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>)
             Some(Token::Equal) => {
                 tokens.next();
                 let right = parse_comparison(tokens)?;
-                // Check for chained comparison: left can't be a comparison
                 if let Expr::Binary(_, op, _) = &left {
                     if op.is_comparison() {
                         return Err("parse error: chained comparison".to_string());
@@ -436,7 +569,6 @@ fn parse_comparison(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>
             Some(Token::Less) => {
                 tokens.next();
                 let right = parse_addsub(tokens)?;
-                // Check for chained comparison: left can't be a comparison
                 if let Expr::Binary(_, op, _) = &left {
                     if op.is_comparison() {
                         return Err("parse error: chained comparison".to_string());
@@ -541,40 +673,13 @@ fn parse_unary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) ->
     }
 }
 
-/// Parse an if expression without the leading 'if' token.
-/// Used for parsing 'else if' branches.
-fn parse_if_expr(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> Result<Expr, String> {
-    // This is called after we've consumed the 'if' token
-    let cond = parse_expr(tokens)?;
-    
-    // Then branch (block)
-    let then_branch = parse_block(tokens)?;
-    
-    // else
-    match tokens.next() {
-        Some(Token::Else) => {}
-        Some(t) => return Err(format!("parse error: expected 'else' after if branch, got {:?}", t)),
-        None => return Err("parse error: unexpected end of input".to_string()),
-    }
-    
-    // else branch: could be a block OR another if expression
-    let else_branch = if tokens.peek() == Some(&Token::If) {
-        tokens.next();
-        parse_if_expr(tokens)?
-    } else {
-        parse_block(tokens)?
-    };
-    
-    Ok(Expr::If(Box::new(cond), Box::new(then_branch), Box::new(else_branch)))
-}
-
 fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> Result<Expr, String> {
     match tokens.next() {
         Some(Token::Number(n)) => Ok(Expr::Number(n)),
         Some(Token::True) => Ok(Expr::Boolean(true)),
         Some(Token::False) => Ok(Expr::Boolean(false)),
         Some(Token::Ident(s)) => {
-            // Check if it's a function call
+            // Check if it's a function call or perform
             if tokens.peek() == Some(&Token::LParen) {
                 tokens.next(); // consume '('
                 let mut args = Vec::new();
@@ -599,6 +704,43 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
                 }
             } else {
                 Ok(Expr::Ident(s))
+            }
+        }
+        Some(Token::Perform) => {
+            // perform op(args)
+            let op_name = match tokens.next() {
+                Some(Token::Ident(s)) => s,
+                Some(t) => return Err(format!("parse error: expected operation name after 'perform', got {:?}", t)),
+                None => return Err("parse error: unexpected end of input".to_string()),
+            };
+            
+            // Parse args
+            match tokens.next() {
+                Some(Token::LParen) => {}
+                None => return Err("parse error: unexpected end of input".to_string()),
+                Some(t) => return Err(format!("parse error: expected '(' after perform op name, got {:?}", t)),
+            }
+            
+            let mut args = Vec::new();
+            while tokens.peek() != Some(&Token::RParen) {
+                if args.is_empty() {
+                    args.push(parse_expr(tokens)?);
+                } else {
+                    match tokens.next() {
+                        Some(Token::Comma) => {
+                            args.push(parse_expr(tokens)?);
+                        }
+                        Some(Token::RParen) => break,
+                        Some(t) => return Err(format!("parse error: expected ',' or ')' in perform, got {:?}", t)),
+                        None => return Err("parse error: unexpected end of input".to_string()),
+                    }
+                }
+            }
+            
+            match tokens.next() {
+                Some(Token::RParen) => Ok(Expr::Perform(op_name, args)),
+                Some(t) => Err(format!("parse error: expected ')' after perform args, got {:?}", t)),
+                None => Err("parse error: unexpected end of input".to_string()),
             }
         }
         Some(Token::LParen) => {
@@ -634,23 +776,17 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
             }
         }
         Some(Token::If) => {
-            // if expr { block } else { block } OR if expr { block } else if ...
             let cond = parse_expr(tokens)?;
-            
-            // Then branch (block)
             let then_branch = parse_block(tokens)?;
             
-            // else
             match tokens.next() {
                 Some(Token::Else) => {}
                 Some(t) => return Err(format!("parse error: expected 'else' after if branch, got {:?}", t)),
                 None => return Err("parse error: unexpected end of input".to_string()),
             }
             
-            // else branch: could be a block OR another if expression
             let else_branch = if tokens.peek() == Some(&Token::If) {
                 tokens.next();
-                // Parse just the if part recursively
                 parse_if_expr(tokens)?
             } else {
                 parse_block(tokens)?
@@ -660,6 +796,232 @@ fn parse_primary(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) 
         }
         Some(t) => Err(format!("parse error: unexpected token: {:?}", t)),
         None => Err("parse error: unexpected end of input".to_string()),
+    }
+}
+
+/// Parse an if expression without the leading 'if' token.
+fn parse_if_expr(tokens: &mut std::iter::Peekable<impl Iterator<Item = Token>>) -> Result<Expr, String> {
+    let cond = parse_expr(tokens)?;
+    let then_branch = parse_block(tokens)?;
+    
+    match tokens.next() {
+        Some(Token::Else) => {}
+        Some(t) => return Err(format!("parse error: expected 'else' after if branch, got {:?}", t)),
+        None => return Err("parse error: unexpected end of input".to_string()),
+    }
+    
+    let else_branch = if tokens.peek() == Some(&Token::If) {
+        tokens.next();
+        parse_if_expr(tokens)?
+    } else {
+        parse_block(tokens)?
+    };
+    
+    Ok(Expr::If(Box::new(cond), Box::new(then_branch), Box::new(else_branch)))
+}
+
+// === Static checking ===
+
+/// Static checks: function references and variable scope
+fn check_static(
+    expr: &Expr, 
+    functions: &[Function],
+    fn_map: &HashMap<String, usize>,
+    effect_map: &HashMap<String, usize>,
+    op_map: &HashMap<String, (String, usize)>,
+    bound_vars: &HashSet<String>,
+) -> Result<HashSet<String>, String> {
+    match expr {
+        Expr::Number(_) | Expr::Boolean(_) => Ok(bound_vars.clone()),
+        Expr::Ident(name) => {
+            if !bound_vars.contains(name) {
+                return Err(format!("check error: unbound variable '{}'", name));
+            }
+            Ok(bound_vars.clone())
+        }
+        Expr::Block(bindings, body) => {
+            let mut new_bound = bound_vars.clone();
+            for (name, e) in bindings {
+                check_static(e, functions, fn_map, effect_map, op_map, &new_bound)?;
+                new_bound.insert(name.clone());
+            }
+            check_static(body, functions, fn_map, effect_map, op_map, &new_bound)
+        }
+        Expr::Call(name, args) => {
+            if !fn_map.contains_key(name) {
+                return Err(format!("check error: undefined function '{}'", name));
+            }
+            // Check arity
+            if let Some(&idx) = fn_map.get(name) {
+                let func = &functions[idx];
+                if args.len() != func.params.len() {
+                    return Err(format!("check error: wrong number of arguments to '{}' (expected {}, got {})", 
+                        name, func.params.len(), args.len()));
+                }
+            }
+            let mut new_bound = bound_vars.clone();
+            for arg in args {
+                new_bound = check_static(arg, functions, fn_map, effect_map, op_map, &new_bound)?;
+            }
+            Ok(new_bound)
+        }
+        Expr::Perform(name, args) => {
+            // Check operation exists and arity
+            if let Some((_, expected_arity)) = op_map.get(name) {
+                if args.len() != *expected_arity {
+                    return Err(format!("check error: wrong number of arguments to '{}' (expected {}, got {})", 
+                        name, expected_arity, args.len()));
+                }
+            } else {
+                return Err(format!("check error: unknown operation '{}'", name));
+            }
+            let mut new_bound = bound_vars.clone();
+            for arg in args {
+                new_bound = check_static(arg, functions, fn_map, effect_map, op_map, &new_bound)?;
+            }
+            Ok(new_bound)
+        }
+        Expr::Binary(left, _, right) => {
+            let new_bound = check_static(left, functions, fn_map, effect_map, op_map, bound_vars)?;
+            check_static(right, functions, fn_map, effect_map, op_map, &new_bound)
+        }
+        Expr::UnaryMinus(inner) | Expr::Not(inner) => {
+            check_static(inner, functions, fn_map, effect_map, op_map, bound_vars)
+        }
+        Expr::If(cond, then, else_) => {
+            let new_bound = check_static(cond, functions, fn_map, effect_map, op_map, bound_vars)?;
+            let new_bound = check_static(then, functions, fn_map, effect_map, op_map, &new_bound)?;
+            check_static(else_, functions, fn_map, effect_map, op_map, &new_bound)
+        }
+    }
+}
+
+// === Effect checking ===
+
+/// Check that all effects used in an expression are declared in uses
+fn check_effects(
+    expr: &Expr,
+    functions: &[Function],
+    fn_map: &HashMap<String, usize>,
+    effect_map: &HashMap<String, usize>,
+    op_map: &HashMap<String, (String, usize)>,
+    uses: &HashSet<String>,
+) -> Result<(), String> {
+    // Collect effects used in this expression (transitively through function calls)
+    let mut used_effects: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    collect_all_effects(expr, functions, fn_map, op_map, &mut used_effects, &mut visited)?;
+    
+    // Check all used effects are in uses
+    for eff in &used_effects {
+        if !uses.contains(eff) {
+            return Err(format!("effect error: effect '{}' used but not declared", eff));
+        }
+    }
+    
+    Ok(())
+}
+
+/// Check effects for a function (including transitive function calls)
+fn check_effects_fn(
+    func: &Function,
+    functions: &[Function],
+    fn_map: &HashMap<String, usize>,
+    effect_map: &HashMap<String, usize>,
+    op_map: &HashMap<String, (String, usize)>,
+) -> Result<(), String> {
+    // Get the uses set for this function
+    let uses: HashSet<String> = func.uses.iter().cloned().collect();
+    
+    // Collect all effects used (direct + transitive)
+    let mut used_effects: HashSet<String> = HashSet::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    collect_all_effects(&func.body, functions, fn_map, op_map, &mut used_effects, &mut visited)?;
+    
+    // Check all used effects are in uses
+    for eff in &used_effects {
+        if !uses.contains(eff) {
+            return Err(format!("effect error: effect '{}' used but not declared in '{}'", eff, func.name));
+        }
+    }
+    
+    // Check uses are declared
+    for eff in &func.uses {
+        if !effect_map.contains_key(eff) {
+            return Err(format!("check error: undeclared effect '{}' in uses clause", eff));
+        }
+    }
+    
+    // Check for duplicate uses
+    let mut seen: HashSet<String> = HashSet::new();
+    for eff in &func.uses {
+        if !seen.insert(eff.clone()) {
+            return Err(format!("check error: duplicate effect '{}' in uses clause", eff));
+        }
+    }
+    
+    Ok(())
+}
+
+/// Collect all effects through function calls (transitively)
+fn collect_all_effects(
+    expr: &Expr,
+    functions: &[Function],
+    fn_map: &HashMap<String, usize>,
+    op_map: &HashMap<String, (String, usize)>,
+    used: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+) -> Result<(), String> {
+    match expr {
+        Expr::Number(_) | Expr::Boolean(_) | Expr::Ident(_) => Ok(()),
+        Expr::Perform(op_name, _args) => {
+            if let Some((eff_name, _)) = op_map.get(op_name) {
+                used.insert(eff_name.clone());
+            } else {
+                return Err(format!("check error: unknown operation '{}'", op_name));
+            }
+            Ok(())
+        }
+        Expr::Block(bindings, body) => {
+            for (_, e) in bindings {
+                collect_all_effects(e, functions, fn_map, op_map, used, visited)?;
+            }
+            collect_all_effects(body, functions, fn_map, op_map, used, visited)
+        }
+        Expr::Call(name, args) => {
+            // First, collect effects from the arguments
+            for arg in args {
+                collect_all_effects(arg, functions, fn_map, op_map, used, visited)?;
+            }
+            
+            // Get the called function and collect its effects
+            if let Some(&idx) = fn_map.get(name) {
+                if !visited.insert(name.clone()) {
+                    // Already visited this function, avoid infinite loop
+                    return Ok(());
+                }
+                let called_func = &functions[idx];
+                // Collect effects from the called function's body
+                collect_all_effects(&called_func.body, functions, fn_map, op_map, used, visited)?;
+                // Add the effects declared in the called function's uses clause
+                for eff in &called_func.uses {
+                    used.insert(eff.clone());
+                }
+            }
+            Ok(())
+        }
+        Expr::Binary(left, _, right) => {
+            collect_all_effects(left, functions, fn_map, op_map, used, visited)?;
+            collect_all_effects(right, functions, fn_map, op_map, used, visited)
+        }
+        Expr::UnaryMinus(inner) | Expr::Not(inner) => {
+            collect_all_effects(inner, functions, fn_map, op_map, used, visited)
+        }
+        Expr::If(cond, then, else_) => {
+            collect_all_effects(cond, functions, fn_map, op_map, used, visited)?;
+            collect_all_effects(then, functions, fn_map, op_map, used, visited)?;
+            collect_all_effects(else_, functions, fn_map, op_map, used, visited)
+        }
     }
 }
 

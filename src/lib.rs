@@ -6,7 +6,7 @@ mod parse;
 
 pub use eval::eval_program;
 pub use lexer::lex;
-pub use parse::{parse, parse_program, Program, Expr, BinOp, Function};
+pub use parse::{parse, parse_program, Program, Expr, BinOp, Function, Effect, Operation};
 pub use lexer::Token;
 
 /// A value in Charter: an integer, exact rational, or boolean.
@@ -18,19 +18,6 @@ pub enum Value {
 }
 
 impl Value {
-    /// Evaluate a binary operation on two values (Stage 0 compatibility).
-    pub fn apply_op(self, op: char, rhs: Value) -> Result<Value, String> {
-        let op = BinOp::from_char(op)
-            .ok_or_else(|| format!("unknown operator '{}'", op))?;
-        match op {
-            BinOp::Add => self.add(rhs),
-            BinOp::Sub => self.sub(rhs),
-            BinOp::Mul => self.mul(rhs),
-            BinOp::Div => self.div(rhs),
-            _ => Err(format!("operator {:?} not supported in apply_op", op)),
-        }
-    }
-
     pub fn add(self, rhs: Value) -> Result<Value, String> {
         let a = self.to_rational()?;
         let b = rhs.to_rational()?;
@@ -105,10 +92,6 @@ impl Value {
             Value::Rational(n, d) => format!("{}/{}", n, d),
             Value::Bool(b) => b.to_string(),
         }
-    }
-
-    pub fn from_bool(b: bool) -> Value {
-        Value::Bool(b)
     }
 }
 

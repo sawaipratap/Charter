@@ -3,7 +3,7 @@
 use std::iter::Peekable;
 use std::str::Chars;
 
-/// All the different kinds of tokens Charter understands at Stage 1.
+/// All the different kinds of tokens Charter understands at Stage 2.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     // Literals
@@ -18,6 +18,9 @@ pub enum Token {
     Else,
     True,
     False,
+    Effect,
+    Uses,
+    Perform,
     
     // Operators
     Plus,
@@ -39,9 +42,12 @@ pub enum Token {
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Semicolon,
     Comma,
     Assign,  // =
+    Colon,   // :
     
     // Special
     Eof,
@@ -67,6 +73,9 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
                     "else" => Token::Else,
                     "true" => Token::True,
                     "false" => Token::False,
+                    "effect" => Token::Effect,
+                    "uses" => Token::Uses,
+                    "perform" => Token::Perform,
                     _ => Token::Ident(ident),
                 };
                 tokens.push(token);
@@ -144,8 +153,11 @@ pub fn lex(input: &str) -> Result<Vec<Token>, String> {
             ')' => { tokens.push(Token::RParen); chars.next(); }
             '{' => { tokens.push(Token::LBrace); chars.next(); }
             '}' => { tokens.push(Token::RBrace); chars.next(); }
+            '[' => { tokens.push(Token::LBracket); chars.next(); }
+            ']' => { tokens.push(Token::RBracket); chars.next(); }
             ';' => { tokens.push(Token::Semicolon); chars.next(); }
             ',' => { tokens.push(Token::Comma); chars.next(); }
+            ':' => { tokens.push(Token::Colon); chars.next(); }
             c if c.is_whitespace() => { chars.next(); }
             c => return Err(format!("lex error: unexpected character '{}'", c)),
         }

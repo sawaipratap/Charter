@@ -19,7 +19,8 @@ pub fn eval_program(program: Program) -> Result<Value, String> {
         functions.insert(func.name.clone(), func);
     }
     
-    // Evaluate main expression with empty environment
+    // In Stage 2, effects are checked but not executed
+    // The main expression should not use any effects (nothing handles them)
     let env: HashMap<String, Value> = HashMap::new();
     let fn_env: HashMap<String, FunValue> = HashMap::new();
     
@@ -45,45 +46,36 @@ fn eval_expr(
         }
         
         Expr::Block(bindings, final_expr) => {
-            // Start with current environment
             let mut new_env = env.clone();
             
-            // Evaluate each binding in sequence
             for (name, value_expr) in bindings {
                 let value = eval_expr(value_expr, &new_env, functions, fn_env)?;
                 new_env.insert(name.clone(), value);
             }
             
-            // Evaluate final expression in the extended environment
             eval_expr(final_expr, &new_env, functions, fn_env)
         }
         
         Expr::Call(name, args) => {
-            // Look up function
             let func = functions.get(name)
-                .ok_or_else(|| format!("check error: undefined function '{}'", name))?;
+                .ok_or_else(|| format!("runtime error: undefined function '{}'", name))?;
             
-            // Check arity
             if args.len() != func.params.len() {
-                return Err(format!("check error: wrong number of arguments to '{}' (expected {}, got {})", 
+                return Err(format!("runtime error: wrong number of arguments to '{}' (expected {}, got {})", 
                     name, func.params.len(), args.len()));
             }
             
-            // Evaluate arguments
             let arg_values: Vec<Value> = args.iter()
                 .map(|arg| eval_expr(arg, env, functions, fn_env))
                 .collect::<Result<Vec<_>, _>>()?;
             
-            // Build closure with current environment
             let closure = env.clone();
             
-            // Create function value
             let fun_val = FunValue {
                 func: func.clone(),
                 captured_env: closure,
             };
             
-            // Extend environment with parameters
             let mut call_env = fun_val.captured_env.clone();
             for (param, value) in func.params.iter().zip(arg_values) {
                 call_env.insert(param.clone(), value);
@@ -91,6 +83,12 @@ fn eval_expr(
             
             // Evaluate function body
             eval_expr(&func.body, &call_env, functions, fn_env)
+        }
+        
+        Expr::Perform(op_name, args) => {
+            // In Stage 2, perform doesn't execute - effects are only checked
+            // This should never be reached for valid programs (they're rejected before execution)
+            Err(format!("runtime error: effect '{}' performed but not handled", op_name))
         }
         
         Expr::Binary(left, op, right) => {
@@ -134,7 +132,6 @@ fn eval_binary(
     functions: &HashMap<String, Function>,
     fn_env: &HashMap<String, FunValue>,
 ) -> Result<Value, String> {
-    // Handle short-circuiting operators
     match op {
         BinOp::And => {
             let left_val = eval_expr(left, env, functions, fn_env)?;
@@ -165,7 +162,6 @@ fn eval_binary(
             }
         }
         _ => {
-            // Non-short-circuiting: evaluate both sides
             let left_val = eval_expr(left, env, functions, fn_env)?;
             let right_val = eval_expr(right, env, functions, fn_env)?;
             
@@ -186,7 +182,7 @@ fn eval_binary(
                         _ => Err("internal error: equals_values returned non-bool".to_string()),
                     }
                 }
-                BinOp::And | BinOp::Or => unreachable!(), // handled above
+                BinOp::And | BinOp::Or => unreachable!(),
             }
         }
     }
@@ -216,7 +212,6 @@ where
 }
 
 fn equals_values(left: &Value, right: &Value) -> Result<Value, String> {
-    // For equality, comparing different types is a runtime error
     match (left, right) {
         (Value::Integer(a), Value::Integer(b)) => Ok(Value::Bool(a == b)),
         (Value::Integer(a), Value::Rational(bn, bd)) => {
@@ -226,7 +221,6 @@ fn equals_values(left: &Value, right: &Value) -> Result<Value, String> {
             Ok(Value::Bool((*an as f64 / *ad as f64) == (*b as f64)))
         }
         (Value::Rational(an, ad), Value::Rational(bn, bd)) => {
-            // Compare as exact rationals
             Ok(Value::Bool(an * bd == bn * ad))
         }
         (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(a == b)),
