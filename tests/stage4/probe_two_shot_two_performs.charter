@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { let x = perform toss(); let y = perform toss(); x * 10 + y } with { toss() k => k(1) + k(2) }

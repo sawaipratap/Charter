@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { perform toss() * 2 } with { toss() k => { let f = k(1); let g = k(1); let h = k(1); f + g + h } }

@@ -1,0 +1,2 @@
+effect C { toss() }
+handle { let a = 100; let x = perform toss(); a + x } with { toss() k => k(1) * 1000 + k(2) }
